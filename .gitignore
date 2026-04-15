@@ -1,0 +1,8 @@
+vendor/
+.env
+storage/*.sqlite
+storage/*.sqlite-shm
+storage/*.sqlite-wal
+storage/exports/
+.phpunit.result.cache
+.phpstan.result.cache
