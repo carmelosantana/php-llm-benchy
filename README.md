@@ -1,6 +1,20 @@
-# php-llm-benchy
+# PHP LLM Benchy
 
-php-llm-benchy is a local Ollama-first benchmark workbench for comparing LLMs across tool use, memory, shell execution, PHP code generation, creative writing, and synthetic game-control tasks. It stores full run history in SQLite, streams live attempt traces to the browser, and produces definitive scores out of 100 for every attempt, benchmark, and model.
+<!-- markdownlint-disable MD033 -->
+<p align="center">
+    <picture>
+        <img src="public/assets/favicon.svg" alt="PHP LLM Benchy" width="256" />
+    </picture>
+</p>
+
+`php-llm-benchy` is a local Ollama-first benchmark workbench for comparing LLMs across tool use, memory, shell execution, PHP code generation, creative writing, and synthetic game-control tasks. It stores full run history in SQLite, streams live attempt traces to the browser, and produces definitive scores out of 100 for every attempt, benchmark, and model.
+
+<!-- markdownlint-disable MD033 -->
+<p align="center">
+    <picture>
+        <img src="public/assets/screenshot-01.png" alt="PHP LLM Benchy Screenshot" width="800" />
+    </picture>
+</p>
 
 ## What it does
 
@@ -40,7 +54,7 @@ V1 ships with eight benchmarks.
 - Creative story quality
 - Poem quality
 
-The Mario benchmark is synthetic. It reuses php-plays-style state and control semantics, but it does not launch a real emulator or ROM.
+> The Mario benchmark is synthetic. It reuses php-plays-style state and control semantics, but it does not launch a real emulator or ROM.
 
 ## Requirements
 
@@ -80,6 +94,58 @@ Start the built-in PHP server:
 ```
 
 Then open `http://127.0.0.1:8080`.
+
+## Run with Docker
+
+This project includes a lightweight Docker setup with PHP 8.4, Composer, and SQLite PDO support.
+
+1. Copy the environment template if you have not already done so.
+
+```bash
+cp .env.example .env
+```
+
+1. Make sure Ollama is reachable from Docker.
+
+The included `docker-compose.yml` assumes Ollama is running on your Mac host and uses `http://host.docker.internal:11434/v1` inside the container.
+
+If your Ollama endpoint lives somewhere else, override it when starting the stack:
+
+```bash
+DOCKER_OLLAMA_BASE_URL=http://your-ollama-host:11434/v1 docker compose up --build
+```
+
+1. Build and start the container.
+
+```bash
+docker compose up --build -d
+```
+
+1. Open the app.
+
+```text
+http://127.0.0.1:8080
+```
+
+The container publishes port `8080` by default. To use another local port, set `APP_PORT` when starting Compose:
+
+```bash
+APP_PORT=8090 docker compose up --build -d
+```
+
+Runtime data is persisted in the named Docker volume `benchy_data`.
+That volume stores the SQLite database, exports, and sandbox files under `/app/storage/runtime`, so data survives container restarts and recreation.
+
+Useful commands:
+
+```bash
+docker compose logs -f app
+docker compose down
+docker compose down -v
+```
+
+- `docker compose down` stops the app and keeps the database volume.
+- `docker compose down -v` also removes the persisted benchmark data.
 
 ## Test and analysis
 

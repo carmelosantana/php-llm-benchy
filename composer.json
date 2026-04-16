@@ -1,6 +1,6 @@
 {
     "name": "carmelosantana/php-llm-benchy",
-    "description": "Session-based LLM benchmarking UI for PHP using php-agents, SQLite, and Basecoat UI.",
+    "description": "LLM benchmarking.",
     "type": "project",
     "license": "MIT",
     "require": {
