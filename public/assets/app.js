@@ -76,6 +76,51 @@ window.benchyApp = function benchyApp() {
             await this.refreshSessions();
         },
 
+        async controlSession(action) {
+            if (!this.selectedSession) {
+                return;
+            }
+
+            const response = await fetch('/api/sessions/' + encodeURIComponent(this.selectedSession.id) + '/' + action, {
+                method: 'POST',
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                window.alert(data.error || 'Failed to update session state.');
+                return;
+            }
+
+            this.selectedSession = data.session;
+
+            if (action === 'pause') {
+                this.currentStatus = 'paused';
+            }
+
+            if (action === 'resume') {
+                this.currentStatus = 'running';
+                this.running = true;
+            }
+
+            if (action === 'stop') {
+                this.currentStatus = 'stopping';
+            }
+
+            await this.refreshSessions();
+        },
+
+        canPauseSelectedSession() {
+            return this.selectedSession && this.selectedSession.status === 'running';
+        },
+
+        canResumeSelectedSession() {
+            return this.selectedSession && this.selectedSession.status === 'paused';
+        },
+
+        canStopSelectedSession() {
+            return this.selectedSession && ['draft', 'running', 'paused', 'evaluating'].includes(this.selectedSession.status);
+        },
+
         async refreshLeaderboard() {
             const response = await fetch('/api/leaderboard');
             const data = await response.json();
@@ -167,7 +212,7 @@ window.benchyApp = function benchyApp() {
                 this.handleStreamEvent(payload.event_type || 'message', payload);
             };
 
-            ['attempt_start', 'iteration', 'text_delta', 'reasoning_delta', 'tool_call', 'tool_result', 'attempt_captured', 'attempt_scored', 'attempt_failed', 'evaluation_start', 'session_complete', 'session_failed', 'fatal', 'model_start', 'end'].forEach((eventName) => {
+            ['attempt_start', 'iteration', 'text_delta', 'reasoning_delta', 'tool_call', 'tool_result', 'attempt_captured', 'attempt_scored', 'attempt_failed', 'evaluation_start', 'session_complete', 'session_failed', 'session_paused', 'session_resumed', 'session_stopped', 'fatal', 'model_start', 'end'].forEach((eventName) => {
                 this.eventSource.addEventListener(eventName, (event) => {
                     const payload = JSON.parse(event.data);
                     void this.handleStreamEvent(eventName, payload);
@@ -197,9 +242,32 @@ window.benchyApp = function benchyApp() {
                 await this.refreshSelectedSession(envelope.session_id, envelope.attempt_id, eventType !== 'model_start');
             }
 
+            if (eventType === 'session_paused') {
+                this.currentStatus = 'paused';
+                await this.refreshSelectedSession(envelope.session_id, envelope.attempt_id, false);
+            }
+
+            if (eventType === 'session_resumed') {
+                this.currentStatus = 'running';
+                this.running = true;
+                await this.refreshSelectedSession(envelope.session_id, envelope.attempt_id, false);
+            }
+
+            if (eventType === 'session_stopped') {
+                this.running = false;
+                this.currentStatus = 'stopped';
+                if (this.eventSource) {
+                    this.eventSource.close();
+                }
+                await this.refreshSelectedSession(envelope.session_id, envelope.attempt_id, false);
+                await this.refreshSessions();
+            }
+
             if (eventType === 'session_complete' || eventType === 'end') {
                 this.running = false;
-                this.currentStatus = 'completed';
+                this.currentStatus = eventType === 'end'
+                    ? (payload.status || 'completed')
+                    : 'completed';
                 if (this.eventSource) {
                     this.eventSource.close();
                 }
@@ -280,6 +348,9 @@ window.benchyApp = function benchyApp() {
                     return `quality ${payload.quality_score}, total ${payload.total_score}`;
                 case 'attempt_captured':
                     return `capability ${payload.capability_score}`;
+                case 'session_paused':
+                case 'session_resumed':
+                case 'session_stopped':
                 case 'session_failed':
                 case 'fatal':
                     return payload.message || 'Fatal error';

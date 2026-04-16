@@ -123,6 +123,57 @@ final readonly class App
             return;
         }
 
+        if ($method === 'POST' && preg_match('#^/api/sessions/([^/]+)/(pause|resume|stop)$#', $path, $matches) === 1) {
+            $sessionId = $matches[1];
+            $action = $matches[2];
+            $session = $this->repository->getSession($sessionId);
+
+            if ($session === null) {
+                $this->json(['error' => 'Session not found.'], 404);
+
+                return;
+            }
+
+            $status = (string) ($session['status'] ?? '');
+
+            if ($action === 'pause') {
+                if ($status !== 'running') {
+                    $this->json(['error' => 'Only running sessions can be paused.'], 409);
+
+                    return;
+                }
+
+                $this->repository->markSessionPaused($sessionId);
+            }
+
+            if ($action === 'resume') {
+                if ($status !== 'paused') {
+                    $this->json(['error' => 'Only paused sessions can be resumed.'], 409);
+
+                    return;
+                }
+
+                $this->repository->markSessionResumed($sessionId);
+            }
+
+            if ($action === 'stop') {
+                if (in_array($status, ['completed', 'failed', 'stopped'], true)) {
+                    $this->json(['error' => 'This session is already finished.'], 409);
+
+                    return;
+                }
+
+                $this->repository->markSessionStopped($sessionId, 'Stopped by user.');
+            }
+
+            $this->json([
+                'action' => $action,
+                'session' => $this->repository->getSession($sessionId),
+            ]);
+
+            return;
+        }
+
         if ($method === 'GET' && preg_match('#^/api/sessions/([^/]+)/events$#', $path, $matches) === 1) {
             $limit = max(1, min(1000, (int) ($_GET['limit'] ?? 300)));
             $attemptId = isset($_GET['attempt_id']) ? (string) $_GET['attempt_id'] : null;
@@ -242,7 +293,10 @@ final readonly class App
 
         try {
             $this->runner->runSession($sessionId, $stream);
-            $stream('end', ['session_id' => $sessionId, 'status' => 'completed']);
+            $stream('end', [
+                'session_id' => $sessionId,
+                'status' => $this->repository->sessionStatus($sessionId) ?? 'unknown',
+            ]);
         } catch (\Throwable $e) {
             $stream('fatal', ['session_id' => $sessionId, 'message' => $e->getMessage()]);
         }
@@ -530,7 +584,12 @@ final readonly class App
                                 <h3>Live Console</h3>
                                 <p>Streaming text, reasoning, tool labels, and run status.</p>
                             </div>
-                            <span class="badge" x-text="currentStatus"></span>
+                            <div class="header-actions">
+                                <button class="btn btn-secondary btn-sm" x-show="canPauseSelectedSession()" @click="controlSession('pause')">Pause</button>
+                                <button class="btn btn-secondary btn-sm" x-show="canResumeSelectedSession()" @click="controlSession('resume')">Resume</button>
+                                <button class="btn btn-secondary btn-sm" x-show="canStopSelectedSession()" @click="controlSession('stop')">Stop</button>
+                                <span class="badge" x-text="currentStatus"></span>
+                            </div>
                         </div>
 
                         <div class="console-layout">

@@ -16,6 +16,16 @@ final class AttemptObserver implements SplObserver
 
     private string $reasoning = '';
 
+    private readonly float $startedAt;
+
+    private int $lastIteration = 0;
+
+    private ?string $lastToolCallName = null;
+
+    private ?string $lastToolResultStatus = null;
+
+    private ?string $lastToolResultCallId = null;
+
     /**
      * @var array<int, array<string, mixed>>
      */
@@ -28,7 +38,9 @@ final class AttemptObserver implements SplObserver
 
     public function __construct(
         private readonly \Closure $emit,
-    ) {}
+    ) {
+        $this->startedAt = microtime(true);
+    }
 
     public function update(SplSubject $subject): void
     {
@@ -40,7 +52,7 @@ final class AttemptObserver implements SplObserver
         $data = $subject->lastEventData();
 
         match ($event) {
-            'agent.iteration' => ($this->emit)('iteration', ['number' => (int) $data]),
+            'agent.iteration' => $this->handleIteration((int) $data),
             'agent.reasoning' => $this->handleReasoning((string) $data),
             'agent.text_delta' => $this->handleTextDelta((string) $data),
             'agent.tool_call' => $this->handleToolCall($data),
@@ -64,6 +76,11 @@ final class AttemptObserver implements SplObserver
     public function metrics(): array
     {
         return [
+            'wall_time_ms' => $this->elapsedMilliseconds(),
+            'last_iteration' => $this->lastIteration,
+            'last_tool_call' => $this->lastToolCallName,
+            'last_tool_result_status' => $this->lastToolResultStatus,
+            'last_tool_result_call_id' => $this->lastToolResultCallId,
             'tool_calls' => $this->toolCalls,
             'tool_results' => $this->toolResults,
             'tool_names' => array_values(array_unique(array_map(
@@ -71,6 +88,15 @@ final class AttemptObserver implements SplObserver
                 $this->toolCalls,
             ))),
         ];
+    }
+
+    private function handleIteration(int $iteration): void
+    {
+        $this->lastIteration = $iteration;
+        ($this->emit)('iteration', [
+            'number' => $iteration,
+            'elapsed_ms' => $this->elapsedMilliseconds(),
+        ]);
     }
 
     private function handleReasoning(string $delta): void
@@ -104,6 +130,7 @@ final class AttemptObserver implements SplObserver
             'name' => $data->name,
             'arguments' => $data->arguments,
         ];
+        $this->lastToolCallName = $data->name;
         $this->toolCalls[] = $payload;
         ($this->emit)('tool_call', $payload);
     }
@@ -119,11 +146,18 @@ final class AttemptObserver implements SplObserver
             'content' => $data->content,
             'call_id' => $data->callId,
         ];
+        $this->lastToolResultStatus = $data->status->value;
+        $this->lastToolResultCallId = $data->callId;
         $this->toolResults[] = $payload;
         ($this->emit)('tool_result', [
             'status' => $payload['status'],
             'call_id' => $payload['call_id'],
             'preview' => mb_substr($payload['content'], 0, 280),
         ]);
+    }
+
+    private function elapsedMilliseconds(): int
+    {
+        return (int) round((microtime(true) - $this->startedAt) * 1000);
     }
 }

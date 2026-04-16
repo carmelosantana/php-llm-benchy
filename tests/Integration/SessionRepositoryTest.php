@@ -201,3 +201,35 @@ it('builds dashboard aggregates including synthetic mario analytics', function (
         ->and($marioAnalytics['models'])->toHaveCount(2)
         ->and($marioAnalytics['models'][0]['model_id'])->toBe('llama3.2');
 });
+
+it('supports paused, resumed, and stopped session states', function (): void {
+    $databasePath = sys_get_temp_dir() . '/php-llm-benchy-tests/db-' . uniqid('', true) . '.sqlite';
+    if (!is_dir(dirname($databasePath))) {
+        mkdir(dirname($databasePath), 0755, true);
+    }
+
+    putenv('DATABASE_PATH=' . $databasePath);
+    $_ENV['DATABASE_PATH'] = $databasePath;
+
+    $config = new AppConfig(dirname(__DIR__, 2));
+    $database = new Database($config);
+    $database->migrate();
+
+    $repository = new SessionRepository($database->pdo());
+    $session = $repository->createSession('ollama', ['llama3.2'], 'llama3.2', ['tool_use'], 1, 7);
+
+    $repository->markSessionRunning($session['id']);
+    $repository->markSessionPaused($session['id']);
+    expect($repository->sessionStatus($session['id']))->toBe('paused');
+
+    $repository->markSessionResumed($session['id']);
+    expect($repository->sessionStatus($session['id']))->toBe('running');
+
+    $repository->markSessionStopped($session['id'], 'Stopped by user.');
+
+    $stored = $repository->getSession($session['id']);
+    expect($stored)->not->toBeNull()
+        ->and($stored['status'])->toBe('stopped')
+        ->and($stored['error_message'])->toBe('Stopped by user.')
+        ->and($stored['completed_at'])->not->toBeNull();
+});

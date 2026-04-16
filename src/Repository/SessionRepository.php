@@ -159,6 +159,24 @@ SQL);
         $this->updateSessionStatus($sessionId, 'evaluating');
     }
 
+    public function markSessionPaused(string $sessionId): void
+    {
+        $this->updateSessionStatus($sessionId, 'paused');
+    }
+
+    public function markSessionResumed(string $sessionId): void
+    {
+        $this->updateSessionStatus($sessionId, 'running');
+    }
+
+    public function markSessionStopped(string $sessionId, ?string $message = null): void
+    {
+        $this->updateSessionStatus($sessionId, 'stopped', [
+            'completed_at' => gmdate('c'),
+            'error_message' => $message,
+        ]);
+    }
+
     public function markSessionCompleted(string $sessionId): void
     {
         $this->updateSessionStatus($sessionId, 'completed', ['completed_at' => gmdate('c')]);
@@ -278,6 +296,15 @@ SQL);
         }, array_reverse($events));
     }
 
+    public function sessionStatus(string $sessionId): ?string
+    {
+        $stmt = $this->pdo->prepare('SELECT status FROM sessions WHERE id = :id');
+        $stmt->execute([':id' => $sessionId]);
+        $status = $stmt->fetchColumn();
+
+        return is_string($status) ? $status : null;
+    }
+
     public function replaceBenchmarkScore(string $sessionId, string $modelId, string $benchmarkId, float $averageScore, float $capabilityAverage, float $qualityAverage, int $runs, array $summary): void
     {
         $stmt = $this->pdo->prepare(
@@ -387,7 +414,7 @@ SQL);
 SELECT
     (SELECT COUNT(*) FROM sessions) AS total_sessions,
     (SELECT COUNT(*) FROM sessions WHERE status = 'completed') AS completed_sessions,
-    (SELECT COUNT(*) FROM sessions WHERE status IN ('running', 'evaluating')) AS active_sessions,
+    (SELECT COUNT(*) FROM sessions WHERE status IN ('running', 'evaluating', 'paused')) AS active_sessions,
     (SELECT COUNT(*) FROM sessions WHERE status = 'failed') AS failed_sessions,
     (SELECT COUNT(*) FROM attempts) AS total_attempts,
     (SELECT COUNT(*) FROM attempts WHERE status = 'completed') AS completed_attempts,

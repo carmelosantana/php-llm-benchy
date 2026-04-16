@@ -11,12 +11,20 @@ use CarmeloSantana\PHPLLMBenchy\Config\AppConfig;
 
 final readonly class ModelProviderFactory
 {
+    /**
+     * @var (\Closure(string, string, ?int): ProviderInterface)|null
+     */
     public function __construct(
         private AppConfig $config,
+        private ?\Closure $resolver = null,
     ) {}
 
     public function create(string $provider, string $model, ?int $seed = null): ProviderInterface
     {
+        if ($this->resolver instanceof \Closure) {
+            return ($this->resolver)($provider, $model, $seed);
+        }
+
         $base = match ($provider) {
             'ollama' => new OllamaProvider(
                 model: $model,
