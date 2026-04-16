@@ -10,6 +10,7 @@ window.benchyApp = function benchyApp() {
         selectedSession: null,
         selectedAttempt: null,
         selectedAttemptEvents: [],
+        traceExpanded: false,
         eventSource: null,
         creatingSession: false,
         running: false,
@@ -98,6 +99,7 @@ window.benchyApp = function benchyApp() {
                 this.selectedSession = data.session;
                 this.selectedAttempt = null;
                 this.selectedAttemptEvents = [];
+                this.traceExpanded = false;
                 this.liveEvents = [];
                 this.liveOutput = '';
                 this.liveReasoning = '';
@@ -139,6 +141,7 @@ window.benchyApp = function benchyApp() {
         selectAttempt(attempt) {
             this.selectedAttempt = attempt;
             this.selectedAttemptEvents = [];
+            this.traceExpanded = false;
             void this.loadAttemptEvents(attempt.id);
         },
 

@@ -268,7 +268,23 @@ final readonly class App
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script>
+        document.documentElement.classList.add('fonts-loading');
+        window.addEventListener('DOMContentLoaded', function () {
+            const fontReady = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
+            Promise.race([
+                fontReady,
+                new Promise((resolve) => window.setTimeout(resolve, 1200)),
+            ]).then(function () {
+                document.documentElement.classList.remove('fonts-loading');
+                document.documentElement.classList.add('fonts-ready');
+            });
+        });
+    </script>
     <title>{$title}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=Geist+Mono:wght@100..900&display=swap">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/basecoat-css@0.3.11/dist/basecoat.cdn.min.css">
     <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
     <link rel="stylesheet" href="/assets/app.css">
@@ -276,6 +292,10 @@ final readonly class App
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
 <body x-data="benchyApp()" x-init="init()" class="benchy-body">
+    <div class="benchy-background" aria-hidden="true">
+        <div class="benchy-grid-glow"></div>
+        <div class="benchy-grid-pattern"></div>
+    </div>
     <div class="benchy-shell">
         <aside class="benchy-sidebar" :class="{ 'is-open': sidebarOpen }">
             <nav aria-label="Session navigation">
@@ -427,7 +447,7 @@ final readonly class App
                             </div>
 
                             <div class="form-actions">
-                                <button type="submit" class="btn btn-primary" :disabled="creatingSession || running">
+                                <button type="submit" class="btn btn-primary btn-lg" :disabled="creatingSession || running">
                                     <span x-text="creatingSession ? 'Creating…' : (running ? 'Running…' : 'Create and Run')"></span>
                                 </button>
                             </div>
@@ -511,11 +531,17 @@ final readonly class App
                                 <div class="attempt-list">
                                     <template x-for="attempt in (selectedSession?.attempts || [])" :key="attempt.id">
                                         <button type="button" class="attempt-card" :class="{ 'is-active': selectedAttempt && selectedAttempt.id === attempt.id }" @click="selectAttempt(attempt)">
-                                            <div class="attempt-top">
-                                                <strong x-text="attempt.model_id + ' • ' + attempt.benchmark_id"></strong>
-                                                <span class="badge" x-text="attempt.total_score + '/100'"></span>
+                                            <div class="attempt-card-header">
+                                                <div class="attempt-card-copy">
+                                                    <p class="attempt-benchmark" x-text="attempt.benchmark_id"></p>
+                                                    <strong class="attempt-model" x-text="attempt.model_id"></strong>
+                                                </div>
+                                                <span class="badge badge-strong attempt-score" x-text="attempt.total_score + '/100'"></span>
                                             </div>
-                                            <p class="attempt-meta" x-text="'Run ' + attempt.run_number + ' • ' + attempt.status"></p>
+                                            <div class="attempt-card-footer">
+                                                <span class="attempt-run" x-text="'Run ' + attempt.run_number"></span>
+                                                <span class="attempt-status" x-text="attempt.status"></span>
+                                            </div>
                                         </button>
                                     </template>
                                 </div>
@@ -525,7 +551,9 @@ final readonly class App
                         <div class="attempt-detail" x-show="selectedAttempt">
                             <div class="detail-toolbar compact-row">
                                 <h4 x-text="selectedAttempt ? ('Attempt ' + selectedAttempt.id) : ''"></h4>
-                                <button class="btn btn-secondary btn-sm" @click="loadAttemptEvents(selectedAttempt.id)">Load trace</button>
+                                <button class="btn btn-secondary btn-sm" @click="loadAttemptEvents(selectedAttempt.id)">
+                                    <span x-text="selectedAttemptEvents.length > 0 ? 'Refresh trace' : 'Load trace'"></span>
+                                </button>
                             </div>
 
                             <div class="detail-split">
@@ -550,15 +578,29 @@ final readonly class App
                                 </div>
                             </div>
 
-                            <div>
-                                <h5>Trace Events</h5>
-                                <div class="trace-list">
-                                    <template x-for="event in selectedAttemptEvents" :key="event.id">
-                                        <div class="trace-item">
-                                            <span class="badge" x-text="event.event_type"></span>
-                                            <pre x-text="formatJson(event.payload)"></pre>
-                                        </div>
-                                    </template>
+                            <div class="trace-section">
+                                <div class="detail-toolbar compact-row">
+                                    <h5>Trace Events</h5>
+                                    <button
+                                        type="button"
+                                        class="btn btn-secondary btn-sm"
+                                        :disabled="selectedAttemptEvents.length === 0"
+                                        @click="traceExpanded = !traceExpanded"
+                                        x-text="traceExpanded ? 'Collapse' : 'Expand'"
+                                    ></button>
+                                </div>
+                                <div class="trace-viewport" :class="{ 'is-expanded': traceExpanded }">
+                                    <div class="trace-list" x-show="selectedAttemptEvents.length > 0">
+                                        <template x-for="event in selectedAttemptEvents" :key="event.id">
+                                            <div class="trace-item">
+                                                <span class="badge" x-text="event.event_type"></span>
+                                                <pre x-text="formatJson(event.payload)"></pre>
+                                            </div>
+                                        </template>
+                                    </div>
+                                    <div class="empty" x-show="selectedAttemptEvents.length === 0">
+                                        <p>Load a trace to inspect recorded attempt events.</p>
+                                    </div>
                                 </div>
                             </div>
                         </div>
