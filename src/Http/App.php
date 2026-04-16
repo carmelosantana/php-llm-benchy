@@ -218,7 +218,7 @@ final readonly class App
             'session_id', 'provider', 'model_id', 'benchmark_id', 'run_number', 'status',
             'capability_score', 'quality_score', 'total_score', 'started_at', 'finished_at',
             'response_text', 'reasoning_text', 'deterministic_json', 'rubric_json', 'usage_json', 'metrics_json',
-        ]);
+        ], ',', '"', '\\');
 
         foreach ($rows as $row) {
             fputcsv($handle, [
@@ -239,7 +239,7 @@ final readonly class App
                 $row['rubric_json'],
                 $row['usage_json'],
                 $row['metrics_json'],
-            ]);
+            ], ',', '"', '\\');
         }
 
         fclose($handle);
@@ -319,6 +319,10 @@ final readonly class App
                             <p>No sessions yet.</p>
                         </div>
                     </div>
+
+                    <p class="sidebar-attribution">
+                        Built with <a href="https://github.com/carmelosantana/php-agents" target="_blank" rel="noreferrer"><code>php-agents</code></a>
+                    </p>
                 </section>
             </nav>
         </aside>
@@ -591,6 +595,10 @@ final readonly class App
                     </article>
                 </aside>
             </section>
+
+            <footer class="benchy-footer">
+                <p class="footer-copy">MIT License © 2026 Carmelo Santana.</p>
+            </footer>
         </main>
     </div>
 </body>
