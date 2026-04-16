@@ -1,6 +1,6 @@
 # php-llm-benchy
 
-php-llm-benchy is a local Ollama-first benchmark workbench for comparing LLMs across tool use, memory, shell execution, PHP code generation, and creative writing. It stores full run history in SQLite, streams live attempt traces to the browser, and produces definitive scores out of 100 for every attempt, benchmark, and model.
+php-llm-benchy is a local Ollama-first benchmark workbench for comparing LLMs across tool use, memory, shell execution, PHP code generation, creative writing, and synthetic game-control tasks. It stores full run history in SQLite, streams live attempt traces to the browser, and produces definitive scores out of 100 for every attempt, benchmark, and model.
 
 ## What it does
 
@@ -29,15 +29,18 @@ Benchmark scores are the average of their attempts. Model scores are the average
 
 ## Benchmarks
 
-V1 ships with seven benchmarks.
+V1 ships with eight benchmarks.
 
 - Tool use
 - Concurrent tool use
+- Synthetic Mario speedrun
 - Memory recall
 - Restricted shell execution
 - PHP script quality
 - Creative story quality
 - Poem quality
+
+The Mario benchmark is synthetic. It reuses php-plays-style state and control semantics, but it does not launch a real emulator or ROM.
 
 ## Requirements
 
@@ -54,13 +57,13 @@ V1 ships with seven benchmarks.
 composer install
 ```
 
-2. Copy the environment template and adjust values if needed.
+1. Copy the environment template and adjust values if needed.
 
 ```bash
 cp .env.example .env
 ```
 
-3. Confirm the Ollama endpoint and models you want to benchmark are available.
+1. Confirm the Ollama endpoint and models you want to benchmark are available.
 
 Example:
 

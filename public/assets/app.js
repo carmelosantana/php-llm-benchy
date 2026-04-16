@@ -2,6 +2,7 @@ window.benchyApp = function benchyApp() {
     return {
         sidebarOpen: false,
         showBrandCopy: true,
+        sessionsRefreshedAt: Date.now(),
         providers: [],
         benchmarks: [],
         availableModels: [],
@@ -68,10 +69,10 @@ window.benchyApp = function benchyApp() {
             const response = await fetch('/api/sessions');
             const data = await response.json();
             this.sessions = data.sessions || [];
+            this.sessionsRefreshedAt = Date.now();
         },
 
         async refreshSessionsFromUser() {
-            this.dismissBrandCopy();
             await this.refreshSessions();
         },
 
@@ -327,6 +328,19 @@ window.benchyApp = function benchyApp() {
             } catch (_error) {
                 return String(value || '');
             }
+        },
+
+        timeAgo(name, _tick) {
+            const match = String(name || '').match(/(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/);
+            if (!match) return name;
+            const date = new Date(match[1].replace(' ', 'T'));
+            if (isNaN(date.getTime())) return name;
+            const secs = Math.floor((Date.now() - date.getTime()) / 1000);
+            if (secs < 60) return 'Just now';
+            if (secs < 3600) return Math.floor(secs / 60) + ' min ago';
+            if (secs < 86400) return Math.floor(secs / 3600) + ' hr ago';
+            if (secs < 604800) return Math.floor(secs / 86400) + ' days ago';
+            return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
         },
     };
 };

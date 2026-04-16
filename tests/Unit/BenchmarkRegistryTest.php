@@ -11,6 +11,7 @@ it('defines the full v1 benchmark catalog with 50 capability points each', funct
     expect(array_keys($definitions))->toBe([
         'tool_use',
         'concurrent_tool_use',
+        'mario_speedrun_synthetic',
         'memory_recall',
         'shell_execution',
         'php_script',
@@ -29,6 +30,6 @@ it('returns a serializable catalog for the frontend', function (): void {
     $registry = new BenchmarkRegistry();
     $catalog = $registry->catalog();
 
-    expect($catalog)->toHaveCount(7)
+    expect($catalog)->toHaveCount(8)
         ->and($catalog[0])->toHaveKeys(['id', 'name', 'description', 'prompt', 'capability_weights', 'scenario', 'tags']);
 });

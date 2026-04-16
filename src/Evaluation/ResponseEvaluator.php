@@ -8,6 +8,7 @@ use CarmeloSantana\PHPAgents\Contract\ProviderInterface;
 use CarmeloSantana\PHPAgents\Message\SystemMessage;
 use CarmeloSantana\PHPAgents\Message\UserMessage;
 use CarmeloSantana\PHPLLMBenchy\Benchmark\BenchmarkDefinition;
+use CarmeloSantana\PHPLLMBenchy\Benchmark\SyntheticMarioBenchmarkFixture;
 use CarmeloSantana\PHPLLMBenchy\Config\AppConfig;
 use Symfony\Component\Process\Process;
 
@@ -23,6 +24,7 @@ final readonly class ResponseEvaluator
         return match ($benchmark->id) {
             'tool_use' => $this->scoreToolUse($benchmark, $responseText, $metrics),
             'concurrent_tool_use' => $this->scoreConcurrentToolUse($benchmark, $responseText, $metrics),
+            SyntheticMarioBenchmarkFixture::ID => $this->scoreSyntheticMario($benchmark, $responseText, $metrics),
             'memory_recall' => $this->scoreMemoryRecall($benchmark, $responseText),
             'shell_execution' => $this->scoreShellExecution($benchmark, $responseText, $metrics),
             'php_script' => $this->scorePhpScript($benchmark, $responseText),
@@ -209,6 +211,71 @@ PROMPT);
         return ['score' => $score, 'checks' => $checks];
     }
 
+    private function scoreSyntheticMario(BenchmarkDefinition $benchmark, string $responseText, array $metrics): array
+    {
+        $checks = [];
+        $score = 0.0;
+        $summary = is_array($metrics['synthetic_mario'] ?? null) ? $metrics['synthetic_mario'] : [];
+        $checkpointCount = (int) ($summary['checkpoint_count'] ?? count($benchmark->scenario['checkpoints'] ?? []));
+        $checkpointsCleared = (int) ($summary['checkpoints_cleared'] ?? 0);
+        $completed = ($summary['completed'] ?? false) === true;
+
+        $checks['completed'] = $completed;
+        $checks['checkpoints_cleared'] = $checkpointsCleared;
+        $checks['checkpoint_count'] = $checkpointCount;
+
+        if ($checkpointCount > 0) {
+            $score += round(15 * ($checkpointsCleared / $checkpointCount), 2);
+        }
+
+        if ($completed) {
+            $score += 10;
+        }
+
+        $framesUsed = (int) ($summary['frames_used'] ?? 0);
+        $targetFrames = (int) ($summary['target_frames'] ?? ($benchmark->scenario['target_frames'] ?? 0));
+        $maxFrames = (int) ($summary['max_frames'] ?? ($benchmark->scenario['max_frames'] ?? 0));
+        $checks['frames_used'] = $framesUsed;
+
+        if ($completed && $maxFrames > $targetFrames && $framesUsed > 0) {
+            $normalized = ($maxFrames - $framesUsed) / ($maxFrames - $targetFrames);
+            $score += round(15 * max(0.0, min(1.0, $normalized)), 2);
+        }
+
+        $toolNames = array_values(array_unique($metrics['tool_names'] ?? []));
+        $requiredTools = $benchmark->scenario['expected_tools'] ?? [];
+        $coverage = count(array_intersect($requiredTools, $toolNames));
+        $reads = (int) ($summary['reads'] ?? 0);
+        $actions = (int) ($summary['actions'] ?? 0);
+        $checks['required_tools_called'] = $coverage;
+        $checks['reads'] = $reads;
+        $checks['actions'] = $actions;
+
+        if ($reads >= 1 && $actions >= 1) {
+            $toolUseScore = 2.5;
+            if ($reads >= 2) {
+                $toolUseScore += 1.5;
+            }
+            if ($coverage === count($requiredTools) && count($requiredTools) > 0) {
+                $toolUseScore += 1.0;
+            }
+            $score += min(5.0, $toolUseScore);
+        }
+
+        $invalidActions = (int) ($summary['invalid_actions'] ?? 0);
+        $checks['invalid_actions'] = $invalidActions;
+        $checks['deaths'] = (int) ($summary['deaths'] ?? 0);
+        $checks['failure_reason'] = (string) ($summary['failure_reason'] ?? '');
+
+        if ($invalidActions === 0 && $actions > 0) {
+            $score += 5;
+        } elseif ($invalidActions === 1 && $actions > 0) {
+            $score += 2.5;
+        }
+
+        return ['score' => min(50.0, round($score, 2)), 'checks' => $checks];
+    }
+
     private function scoreShellExecution(BenchmarkDefinition $benchmark, string $responseText, array $metrics): array
     {
         $checks = [];
@@ -293,12 +360,13 @@ PROMPT);
         $input = (int) ($benchmark->scenario['test_input'] ?? 15);
         $runner = new Process([
             'php',
+            '-ddisplay_errors=0',
             '-r',
             sprintf('require %s; echo json_encode(%s(%d));', var_export($file, true), $functionName, $input),
         ]);
         $runner->setTimeout(10);
         $runner->run();
-        $decoded = json_decode(trim($runner->getOutput()), true);
+        $decoded = $this->decodeRuntimeJsonArray($runner->getOutput());
         $expected = $benchmark->scenario['expected_output'] ?? [];
         $checks['behavior_matches_expected'] = $decoded === $expected;
         if ($decoded === $expected) {
@@ -416,5 +484,31 @@ PROMPT);
         }
 
         return $found;
+    }
+
+    /**
+     * @return array<mixed>|null
+     */
+    private function decodeRuntimeJsonArray(string $output): ?array
+    {
+        $decoded = json_decode(trim($output), true);
+        if (is_array($decoded)) {
+            return $decoded;
+        }
+
+        $lines = preg_split('/\R/', trim($output)) ?: [];
+        for ($index = count($lines) - 1; $index >= 0; $index--) {
+            $candidate = trim($lines[$index]);
+            if ($candidate === '') {
+                continue;
+            }
+
+            $decoded = json_decode($candidate, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return null;
     }
 }

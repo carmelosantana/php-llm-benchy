@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CarmeloSantana\PHPLLMBenchy\Runner;
 
 use BackedEnum;
+use CarmeloSantana\PHPAgents\Contract\ToolkitInterface;
 use CarmeloSantana\PHPAgents\Enum\ModelCapability;
 use CarmeloSantana\PHPAgents\Message\AssistantMessage;
 use CarmeloSantana\PHPAgents\Message\Conversation;
@@ -15,11 +16,14 @@ use CarmeloSantana\PHPAgents\Tool\ToolResult;
 use CarmeloSantana\PHPLLMBenchy\Agent\BenchyAgent;
 use CarmeloSantana\PHPLLMBenchy\Benchmark\BenchmarkDefinition;
 use CarmeloSantana\PHPLLMBenchy\Benchmark\BenchmarkRegistry;
+use CarmeloSantana\PHPLLMBenchy\Benchmark\SyntheticMarioBenchmarkFixture;
 use CarmeloSantana\PHPLLMBenchy\Config\AppConfig;
 use CarmeloSantana\PHPLLMBenchy\Evaluation\ResponseEvaluator;
 use CarmeloSantana\PHPLLMBenchy\Repository\SessionRepository;
+use CarmeloSantana\PHPLLMBenchy\Toolkit\BenchmarkTelemetryAwareToolkit;
 use CarmeloSantana\PHPLLMBenchy\Toolkit\SandboxShell;
 use CarmeloSantana\PHPLLMBenchy\Toolkit\StaticToolkit;
+use CarmeloSantana\PHPLLMBenchy\Toolkit\SyntheticMarioToolkit;
 
 final class BenchmarkRunner
 {
@@ -113,12 +117,12 @@ final class BenchmarkRunner
             provider: $provider,
             systemInstructions: $this->instructionsForBenchmark($benchmark),
             capabilities: $this->capabilitiesForBenchmark($benchmark),
-            maxIterations: in_array($benchmark->id, ['tool_use', 'concurrent_tool_use', 'shell_execution'], true) ? 8 : 5,
+            maxIterations: $this->maxIterationsForBenchmark($benchmark),
         );
         $agent->attach($observer);
 
         $toolkit = $this->toolkitForBenchmark($sessionId, $benchmark);
-        if ($toolkit instanceof StaticToolkit) {
+        if ($toolkit !== null) {
             $agent->addToolkit($toolkit);
         }
 
@@ -133,6 +137,9 @@ final class BenchmarkRunner
                 'total_tokens' => $usage->totalTokens,
             ];
             $metrics = $observer->metrics();
+            if ($toolkit instanceof BenchmarkTelemetryAwareToolkit) {
+                $metrics = array_merge($metrics, $toolkit->benchmarkMetrics());
+            }
             $metrics['iterations'] = $output->iterations;
             $metrics['finish_reason'] = $output->finishReason->value;
             $metrics['resolved_model'] = $output->model !== '' ? $output->model : $modelId;
@@ -287,15 +294,25 @@ final class BenchmarkRunner
         return match ($benchmark->id) {
             'php_script' => 'You are running inside a benchmark harness. Follow the user prompt exactly. When asked for PHP, output only PHP and no markdown fences.',
             'memory_recall' => 'You are running inside a benchmark harness. Use only the prior conversation and the user prompt. Do not invent details.',
+            SyntheticMarioBenchmarkFixture::ID => 'You are running inside a benchmark harness that simulates a Mario control loop. Read game state before acting, use the synthetic Mario tools to clear the course as fast as possible, and finish with a short summary that states whether the run completed and the total synthetic frames used.',
             default => 'You are running inside a benchmark harness. Follow the user prompt exactly, use tools when they are useful, and avoid extra meta commentary.',
         };
     }
 
     private function capabilitiesForBenchmark(BenchmarkDefinition $benchmark): array
     {
-        return in_array($benchmark->id, ['tool_use', 'concurrent_tool_use', 'shell_execution'], true)
+        return in_array($benchmark->id, ['tool_use', 'concurrent_tool_use', 'shell_execution', SyntheticMarioBenchmarkFixture::ID], true)
             ? [ModelCapability::Text, ModelCapability::Tools]
             : [ModelCapability::Text];
+    }
+
+    private function maxIterationsForBenchmark(BenchmarkDefinition $benchmark): int
+    {
+        return match ($benchmark->id) {
+            SyntheticMarioBenchmarkFixture::ID => (int) ($benchmark->scenario['max_iterations'] ?? 14),
+            'tool_use', 'concurrent_tool_use', 'shell_execution' => 8,
+            default => 5,
+        };
     }
 
     private function historyForBenchmark(BenchmarkDefinition $benchmark): ?Conversation
@@ -317,12 +334,13 @@ final class BenchmarkRunner
         return $conversation;
     }
 
-    private function toolkitForBenchmark(string $sessionId, BenchmarkDefinition $benchmark): ?StaticToolkit
+    private function toolkitForBenchmark(string $sessionId, BenchmarkDefinition $benchmark): ?ToolkitInterface
     {
         return match ($benchmark->id) {
             'tool_use' => $this->toolUseToolkit(),
             'concurrent_tool_use' => $this->concurrentToolkit(),
             'shell_execution' => $this->shellToolkit($sessionId, $benchmark),
+            SyntheticMarioBenchmarkFixture::ID => new SyntheticMarioToolkit($benchmark->scenario),
             default => null,
         };
     }
