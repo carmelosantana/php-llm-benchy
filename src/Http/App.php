@@ -261,6 +261,8 @@ final readonly class App
     private function renderIndex(): string
     {
         $title = htmlspecialchars($this->config->appName(), ENT_QUOTES, 'UTF-8');
+        $cssHref = $this->assetHref('/assets/app.css');
+        $jsHref = $this->assetHref('/assets/app.js');
 
         return <<<HTML
 <!DOCTYPE html>
@@ -287,14 +289,33 @@ final readonly class App
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=Geist+Mono:wght@100..900&display=swap">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/basecoat-css@0.3.11/dist/basecoat.cdn.min.css">
     <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
-    <link rel="stylesheet" href="/assets/app.css">
-    <script defer src="/assets/app.js"></script>
+    <link rel="stylesheet" href="{$cssHref}">
+    <script defer src="{$jsHref}"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
 <body x-data="benchyApp()" x-init="init()" class="benchy-body">
     <div class="benchy-background" aria-hidden="true">
         <div class="benchy-grid-glow"></div>
-        <div class="benchy-grid-pattern"></div>
+        <svg class="benchy-hex-pattern" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <pattern id="hex-bg" width="105" height="60.622" patternUnits="userSpaceOnUse" x="-1" y="-1">
+                    <polygon class="hex-tile" points="61.25,30.311 43.75,60.622 8.75,60.622 -8.75,30.311 8.75,0 43.75,0"/>
+                    <polygon class="hex-tile" points="113.75,60.622 96.25,90.933 61.25,90.933 43.75,60.622 61.25,30.311 96.25,30.311"/>
+                </pattern>
+            </defs>
+            <rect width="100%" height="100%" style="fill:url(#hex-bg);stroke:none"/>
+            <svg aria-hidden="true" style="overflow:visible" x="-1" y="-1">
+                <polygon class="hex-highlight" points="112.75,121.244 95.75,150.689 61.75,150.689 44.75,121.244 61.75,91.799 95.75,91.799"/>
+                <polygon class="hex-highlight" points="165.25,151.555 148.25,181.000 114.25,181.000 97.25,151.555 114.25,122.110 148.25,122.110"/>
+                <polygon class="hex-highlight" points="217.75,303.110 200.75,332.555 166.75,332.555 149.75,303.110 166.75,273.665 200.75,273.665"/>
+                <polygon class="hex-highlight" points="270.25,272.799 253.25,302.244 219.25,302.244 202.25,272.799 219.25,243.354 253.25,243.354"/>
+                <polygon class="hex-highlight" points="322.75,303.110 305.75,332.555 271.75,332.555 254.75,303.110 271.75,273.665 305.75,273.665"/>
+                <polygon class="hex-highlight" points="375.25,212.177 358.25,241.622 324.25,241.622 307.25,212.177 324.25,182.732 358.25,182.732"/>
+                <polygon class="hex-highlight" points="480.25,151.555 463.25,181.000 429.25,181.000 412.25,151.555 429.25,122.110 463.25,122.110"/>
+                <polygon class="hex-highlight" points="480.25,333.421 463.25,362.866 429.25,362.866 412.25,333.421 429.25,304.976 463.25,304.976"/>
+                <polygon class="hex-highlight" points="585.25,636.531 568.25,666.976 534.25,666.976 517.25,636.531 534.25,607.086 568.25,607.086"/>
+            </svg>
+        </svg>
     </div>
     <div class="benchy-shell">
         <aside class="benchy-sidebar" :class="{ 'is-open': sidebarOpen }">
@@ -324,13 +345,13 @@ final readonly class App
                         <div class="session-list" x-show="sessions.length > 0">
                             <template x-for="session in sessions" :key="session.id">
                                 <button type="button" class="session-item" :class="{ 'is-active': selectedSession && selectedSession.id === session.id }" @click="selectSession(session.id)">
-                                    <div class="session-item-main">
+                                    <span class="session-item-main">
                                         <strong x-text="session.name"></strong>
                                         <span class="session-meta" x-text="session.provider + ' • ' + session.status"></span>
-                                    </div>
-                                    <div class="session-item-side">
+                                    </span>
+                                    <span class="session-item-side">
                                         <span class="badge" x-text="session.completed_attempt_count + '/' + session.attempt_count"></span>
-                                    </div>
+                                    </span>
                                 </button>
                             </template>
                         </div>
@@ -531,17 +552,11 @@ final readonly class App
                                 <div class="attempt-list">
                                     <template x-for="attempt in (selectedSession?.attempts || [])" :key="attempt.id">
                                         <button type="button" class="attempt-card" :class="{ 'is-active': selectedAttempt && selectedAttempt.id === attempt.id }" @click="selectAttempt(attempt)">
-                                            <div class="attempt-card-header">
-                                                <div class="attempt-card-copy">
-                                                    <p class="attempt-benchmark" x-text="attempt.benchmark_id"></p>
-                                                    <strong class="attempt-model" x-text="attempt.model_id"></strong>
-                                                </div>
-                                                <span class="badge badge-strong attempt-score" x-text="attempt.total_score + '/100'"></span>
+                                            <div class="attempt-top">
+                                                <strong x-text="attempt.model_id + ' • ' + attempt.benchmark_id"></strong>
+                                                <span class="badge badge-strong" x-text="formatScore(attempt.total_score)"></span>
                                             </div>
-                                            <div class="attempt-card-footer">
-                                                <span class="attempt-run" x-text="'Run ' + attempt.run_number"></span>
-                                                <span class="attempt-status" x-text="attempt.status"></span>
-                                            </div>
+                                            <p class="attempt-meta" x-text="'Run ' + attempt.run_number + ' • ' + formatStatusLabel(attempt.status) + ' • Cap: ' + formatScore(attempt.capability_score, 50) + ' • Qual: ' + formatScore(attempt.quality_score, 50)"></p>
                                         </button>
                                     </template>
                                 </div>
@@ -646,5 +661,13 @@ final readonly class App
 </body>
 </html>
 HTML;
+    }
+
+    private function assetHref(string $publicPath): string
+    {
+        $assetPath = dirname(__DIR__, 2) . '/public' . $publicPath;
+        $version = is_file($assetPath) ? (string) filemtime($assetPath) : (string) time();
+
+        return $publicPath . '?v=' . rawurlencode($version);
     }
 }

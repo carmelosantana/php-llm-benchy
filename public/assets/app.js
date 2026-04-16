@@ -301,6 +301,26 @@ window.benchyApp = function benchyApp() {
             window.localStorage.setItem('benchy.hideBrandCopy', '1');
         },
 
+        formatBenchmarkLabel(value) {
+            return String(value || '')
+                .replace(/_/g, ' ')
+                .trim();
+        },
+
+        formatStatusLabel(value) {
+            const normalized = String(value || '').trim();
+            if (normalized.length === 0) {
+                return 'Unknown';
+            }
+
+            return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+        },
+
+        formatScore(value, max = 100) {
+            const numeric = Number(value || 0);
+            return Math.round(numeric) + '/' + max;
+        },
+
         formatJson(value) {
             try {
                 return JSON.stringify(value, null, 2);
