@@ -1,0 +1,11 @@
+.git
+.gitignore
+.env
+.phpstan.result.cache
+.phpunit.result.cache
+tests
+vendor
+storage/benchy.sqlite
+storage/exports
+storage/runtime
+storage/sandbox

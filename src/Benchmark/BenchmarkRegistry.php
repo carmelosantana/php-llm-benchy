@@ -46,6 +46,20 @@ final class BenchmarkRegistry
                 ],
                 tags: ['tools', 'multi-tool'],
             ),
+            SyntheticMarioBenchmarkFixture::ID => new BenchmarkDefinition(
+                id: SyntheticMarioBenchmarkFixture::ID,
+                name: 'Synthetic Mario Speedrun',
+                description: 'Tests whether the model can read Mario-like game state, choose control sequences, and finish a deterministic synthetic level quickly.',
+                prompt: SyntheticMarioBenchmarkFixture::prompt(),
+                capabilityWeights: [
+                    'progress_and_completion' => 25,
+                    'time_efficiency' => 15,
+                    'strategic_tool_use' => 5,
+                    'valid_control_sequences' => 5,
+                ],
+                scenario: SyntheticMarioBenchmarkFixture::scenario(),
+                tags: ['tools', 'games', 'synthetic', 'php-plays'],
+            ),
             'memory_recall' => new BenchmarkDefinition(
                 id: 'memory_recall',
                 name: 'Memory Recall',

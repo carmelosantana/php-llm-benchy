@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace CarmeloSantana\PHPLLMBenchy\Agent;
 
 use CarmeloSantana\PHPAgents\Agent\AbstractAgent;
+use CarmeloSantana\PHPAgents\Contract\CancellationTokenInterface;
 use CarmeloSantana\PHPAgents\Contract\ProviderInterface;
+use CarmeloSantana\PHPAgents\Contract\TickCallbackInterface;
 use CarmeloSantana\PHPAgents\Enum\ModelCapability;
 
 final class BenchyAgent extends AbstractAgent
@@ -18,8 +20,15 @@ final class BenchyAgent extends AbstractAgent
         private readonly string $systemInstructions,
         private readonly array $capabilities = [ModelCapability::Text, ModelCapability::Tools],
         int $maxIterations = 8,
+        ?CancellationTokenInterface $cancellationToken = null,
+        ?TickCallbackInterface $tickCallback = null,
     ) {
-        parent::__construct($provider, $maxIterations);
+        parent::__construct(
+            $provider,
+            $maxIterations,
+            cancellationToken: $cancellationToken,
+            tickCallback: $tickCallback,
+        );
     }
 
     public function instructions(): string

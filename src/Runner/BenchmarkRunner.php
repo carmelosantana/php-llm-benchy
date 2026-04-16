@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace CarmeloSantana\PHPLLMBenchy\Runner;
 
 use BackedEnum;
+use CarmeloSantana\PHPAgents\Contract\ToolkitInterface;
+use CarmeloSantana\PHPAgents\Enum\AgentFinishReason;
 use CarmeloSantana\PHPAgents\Enum\ModelCapability;
 use CarmeloSantana\PHPAgents\Message\AssistantMessage;
 use CarmeloSantana\PHPAgents\Message\Conversation;
@@ -15,20 +17,33 @@ use CarmeloSantana\PHPAgents\Tool\ToolResult;
 use CarmeloSantana\PHPLLMBenchy\Agent\BenchyAgent;
 use CarmeloSantana\PHPLLMBenchy\Benchmark\BenchmarkDefinition;
 use CarmeloSantana\PHPLLMBenchy\Benchmark\BenchmarkRegistry;
+use CarmeloSantana\PHPLLMBenchy\Benchmark\SyntheticMarioBenchmarkFixture;
 use CarmeloSantana\PHPLLMBenchy\Config\AppConfig;
 use CarmeloSantana\PHPLLMBenchy\Evaluation\ResponseEvaluator;
 use CarmeloSantana\PHPLLMBenchy\Repository\SessionRepository;
+use CarmeloSantana\PHPLLMBenchy\Toolkit\BenchmarkTelemetryAwareToolkit;
 use CarmeloSantana\PHPLLMBenchy\Toolkit\SandboxShell;
 use CarmeloSantana\PHPLLMBenchy\Toolkit\StaticToolkit;
+use CarmeloSantana\PHPLLMBenchy\Toolkit\SyntheticMarioToolkit;
 
 final class BenchmarkRunner
 {
+    /**
+     * @var \Closure(int): void
+     */
+    private readonly \Closure $pauseWaiter;
+
     public function __construct(
         private readonly AppConfig $config,
         private readonly SessionRepository $repository,
         private readonly BenchmarkRegistry $registry,
         private readonly ModelProviderFactory $providerFactory,
-    ) {}
+        ?\Closure $pauseWaiter = null,
+    ) {
+        $this->pauseWaiter = $pauseWaiter ?? static function (int $microseconds): void {
+            usleep($microseconds);
+        };
+    }
 
     /**
      * @param \Closure(string, array<string, mixed>): void $stream
@@ -40,22 +55,36 @@ final class BenchmarkRunner
             throw new \RuntimeException('Session not found.');
         }
 
-        if (($session['status'] ?? '') === 'completed') {
-            $this->emit($stream, $sessionId, null, 'session_skipped', ['reason' => 'Session already completed.']);
+        if (in_array((string) ($session['status'] ?? ''), ['completed', 'stopped'], true)) {
+            $this->emit($stream, $sessionId, null, 'session_skipped', ['reason' => 'Session already finished.']);
 
             return;
         }
 
-        $this->prepareSandbox($sessionId);
-        $this->repository->markSessionRunning($sessionId);
+        if (($session['status'] ?? '') === 'draft') {
+            $this->prepareSandbox($sessionId);
+        }
+
+        if (($session['status'] ?? '') !== 'running') {
+            $this->repository->markSessionRunning($sessionId);
+        }
+
         $attemptPayloads = [];
 
         try {
             foreach ($session['models'] as $modelRow) {
+                if (!$this->waitForRunnableSession($sessionId, $stream)) {
+                    return;
+                }
+
                 $modelId = (string) $modelRow['model_id'];
                 $this->emit($stream, $sessionId, null, 'model_start', ['model_id' => $modelId]);
 
                 foreach ($session['benchmarks'] as $benchmarkRow) {
+                    if (!$this->waitForRunnableSession($sessionId, $stream)) {
+                        return;
+                    }
+
                     $benchmarkId = (string) $benchmarkRow['benchmark_id'];
                     $definition = $this->registry->find($benchmarkId);
 
@@ -65,6 +94,10 @@ final class BenchmarkRunner
 
                     $runs = (int) $session['runs_per_benchmark'];
                     for ($runNumber = 1; $runNumber <= $runs; $runNumber++) {
+                        if (!$this->waitForRunnableSession($sessionId, $stream)) {
+                            return;
+                        }
+
                         $attemptPayloads[] = $this->runAttempt(
                             $sessionId,
                             (string) $session['provider'],
@@ -78,9 +111,20 @@ final class BenchmarkRunner
                 }
             }
 
+            if (!$this->waitForRunnableSession($sessionId, $stream)) {
+                return;
+            }
+
             $this->repository->markSessionEvaluating($sessionId);
             $this->emit($stream, $sessionId, null, 'evaluation_start', ['message' => 'Scoring captured responses']);
-            $this->evaluateAttempts($sessionId, (string) $session['provider'], (string) $session['evaluation_model'], $session['seed'] !== null ? (int) $session['seed'] : null, $attemptPayloads, $stream);
+            if (!$this->evaluateAttempts($sessionId, (string) $session['provider'], (string) $session['evaluation_model'], $session['seed'] !== null ? (int) $session['seed'] : null, $attemptPayloads, $stream)) {
+                if ($this->repository->sessionStatus($sessionId) !== 'stopped') {
+                    $this->repository->markSessionStopped($sessionId, 'Session stopped before evaluation completed.');
+                }
+                $this->emit($stream, $sessionId, null, 'session_stopped', ['message' => 'Session stopped before evaluation completed.']);
+
+                return;
+            }
             $this->repository->markSessionCompleted($sessionId);
             $this->emit($stream, $sessionId, null, 'session_complete', ['leaderboard' => $this->repository->listModelScores($sessionId)]);
         } catch (\Throwable $e) {
@@ -109,16 +153,27 @@ final class BenchmarkRunner
             $this->emit($stream, $sessionId, $attemptId, $eventType, $payload);
         });
 
+        $attemptTimeout = $benchmark->id === SyntheticMarioBenchmarkFixture::ID
+            ? $this->config->syntheticMarioAttemptTimeoutSeconds()
+            : null;
+        $token = new AttemptCancellationToken(
+            $this->repository,
+            $sessionId,
+            $attemptTimeout !== null ? microtime(true) + $attemptTimeout : null,
+            $this->config->sessionControlPollMilliseconds(),
+        );
+
         $agent = new BenchyAgent(
             provider: $provider,
             systemInstructions: $this->instructionsForBenchmark($benchmark),
             capabilities: $this->capabilitiesForBenchmark($benchmark),
-            maxIterations: in_array($benchmark->id, ['tool_use', 'concurrent_tool_use', 'shell_execution'], true) ? 8 : 5,
+            maxIterations: $this->maxIterationsForBenchmark($benchmark),
+            cancellationToken: $token,
         );
         $agent->attach($observer);
 
         $toolkit = $this->toolkitForBenchmark($sessionId, $benchmark);
-        if ($toolkit instanceof StaticToolkit) {
+        if ($toolkit !== null) {
             $agent->addToolkit($toolkit);
         }
 
@@ -133,9 +188,51 @@ final class BenchmarkRunner
                 'total_tokens' => $usage->totalTokens,
             ];
             $metrics = $observer->metrics();
+            if ($toolkit instanceof BenchmarkTelemetryAwareToolkit) {
+                $metrics = array_merge($metrics, $toolkit->benchmarkMetrics());
+            }
             $metrics['iterations'] = $output->iterations;
             $metrics['finish_reason'] = $output->finishReason->value;
             $metrics['resolved_model'] = $output->model !== '' ? $output->model : $modelId;
+
+            if ($output->finishReason === AgentFinishReason::Error && $token->reason() !== null) {
+                $failureMessage = $token->reason() === 'timeout'
+                    ? sprintf('Synthetic Mario attempt timed out after %d seconds.', $attemptTimeout ?? 0)
+                    : 'Attempt stopped by user.';
+
+                $metrics['control_reason'] = $token->reason();
+                $metrics['timeout_seconds'] = $attemptTimeout;
+
+                $this->repository->completeAttempt(
+                    $attemptId,
+                    'failed',
+                    '',
+                    $observer->reasoning(),
+                    ['error' => $failureMessage],
+                    [],
+                    $usageData,
+                    $metrics,
+                    0.0,
+                    0.0,
+                    0.0,
+                );
+
+                $this->emit($stream, $sessionId, $attemptId, 'attempt_failed', [
+                    'message' => $failureMessage,
+                    'reason' => $token->reason(),
+                ]);
+
+                return [
+                    'attempt_id' => $attemptId,
+                    'model_id' => $modelId,
+                    'benchmark_id' => $benchmark->id,
+                    'run_number' => $runNumber,
+                    'response_text' => '',
+                    'capability_score' => 0.0,
+                    'metrics' => $metrics,
+                    'definition' => $benchmark,
+                ];
+            }
 
             $evaluator = new ResponseEvaluator($provider, $this->config);
             $capability = $evaluator->scoreCapability($benchmark, $output->content, $metrics);
@@ -202,13 +299,17 @@ final class BenchmarkRunner
      * @param array<int, array<string, mixed>> $attemptPayloads
      * @param \Closure(string, array<string, mixed>): void $stream
      */
-    private function evaluateAttempts(string $sessionId, string $providerName, string $evaluationModel, ?int $seed, array $attemptPayloads, \Closure $stream): void
+    private function evaluateAttempts(string $sessionId, string $providerName, string $evaluationModel, ?int $seed, array $attemptPayloads, \Closure $stream): bool
     {
         $provider = $this->providerFactory->create($providerName, $evaluationModel, $seed);
         $evaluator = new ResponseEvaluator($provider, $this->config);
         $evaluated = [];
 
         foreach ($attemptPayloads as $payload) {
+            if (!$this->waitForRunnableSession($sessionId, $stream, allowPause: false)) {
+                return false;
+            }
+
             /** @var BenchmarkDefinition $definition */
             $definition = $payload['definition'];
             $attemptId = (string) $payload['attempt_id'];
@@ -280,6 +381,8 @@ final class BenchmarkRunner
                 'weights' => $weights,
             ]);
         }
+
+        return true;
     }
 
     private function instructionsForBenchmark(BenchmarkDefinition $benchmark): string
@@ -287,15 +390,25 @@ final class BenchmarkRunner
         return match ($benchmark->id) {
             'php_script' => 'You are running inside a benchmark harness. Follow the user prompt exactly. When asked for PHP, output only PHP and no markdown fences.',
             'memory_recall' => 'You are running inside a benchmark harness. Use only the prior conversation and the user prompt. Do not invent details.',
+            SyntheticMarioBenchmarkFixture::ID => 'You are running inside a benchmark harness that simulates a Mario control loop. Read game state before acting, use the synthetic Mario tools to clear the course as fast as possible, and finish with a short summary that states whether the run completed and the total synthetic frames used.',
             default => 'You are running inside a benchmark harness. Follow the user prompt exactly, use tools when they are useful, and avoid extra meta commentary.',
         };
     }
 
     private function capabilitiesForBenchmark(BenchmarkDefinition $benchmark): array
     {
-        return in_array($benchmark->id, ['tool_use', 'concurrent_tool_use', 'shell_execution'], true)
+        return in_array($benchmark->id, ['tool_use', 'concurrent_tool_use', 'shell_execution', SyntheticMarioBenchmarkFixture::ID], true)
             ? [ModelCapability::Text, ModelCapability::Tools]
             : [ModelCapability::Text];
+    }
+
+    private function maxIterationsForBenchmark(BenchmarkDefinition $benchmark): int
+    {
+        return match ($benchmark->id) {
+            SyntheticMarioBenchmarkFixture::ID => (int) ($benchmark->scenario['max_iterations'] ?? 14),
+            'tool_use', 'concurrent_tool_use', 'shell_execution' => 8,
+            default => 5,
+        };
     }
 
     private function historyForBenchmark(BenchmarkDefinition $benchmark): ?Conversation
@@ -317,12 +430,13 @@ final class BenchmarkRunner
         return $conversation;
     }
 
-    private function toolkitForBenchmark(string $sessionId, BenchmarkDefinition $benchmark): ?StaticToolkit
+    private function toolkitForBenchmark(string $sessionId, BenchmarkDefinition $benchmark): ?ToolkitInterface
     {
         return match ($benchmark->id) {
             'tool_use' => $this->toolUseToolkit(),
             'concurrent_tool_use' => $this->concurrentToolkit(),
             'shell_execution' => $this->shellToolkit($sessionId, $benchmark),
+            SyntheticMarioBenchmarkFixture::ID => new SyntheticMarioToolkit($benchmark->scenario),
             default => null,
         };
     }
@@ -429,6 +543,48 @@ final class BenchmarkRunner
             if ($item->isFile()) {
                 unlink($item->getPathname());
             }
+        }
+    }
+
+    /**
+     * @param \Closure(string, array<string, mixed>): void $stream
+     */
+    private function waitForRunnableSession(string $sessionId, \Closure $stream, bool $allowPause = true): bool
+    {
+        $pauseEmitted = false;
+
+        while (true) {
+            $status = $this->repository->sessionStatus($sessionId);
+
+            if ($status === null) {
+                throw new \RuntimeException('Session not found.');
+            }
+
+            if ($status === 'stopped') {
+                $this->emit($stream, $sessionId, null, 'session_stopped', ['message' => 'Session stopped by user.']);
+
+                return false;
+            }
+
+            if ($status === 'failed') {
+                return false;
+            }
+
+            if ($allowPause && $status === 'paused') {
+                if (!$pauseEmitted) {
+                    $this->emit($stream, $sessionId, null, 'session_paused', ['message' => 'Session paused. Waiting for resume.']);
+                    $pauseEmitted = true;
+                }
+
+                ($this->pauseWaiter)($this->config->sessionControlPollMilliseconds() * 1000);
+                continue;
+            }
+
+            if ($pauseEmitted && $status === 'running') {
+                $this->emit($stream, $sessionId, null, 'session_resumed', ['message' => 'Session resumed.']);
+            }
+
+            return true;
         }
     }
 

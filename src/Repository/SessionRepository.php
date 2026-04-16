@@ -159,6 +159,24 @@ SQL);
         $this->updateSessionStatus($sessionId, 'evaluating');
     }
 
+    public function markSessionPaused(string $sessionId): void
+    {
+        $this->updateSessionStatus($sessionId, 'paused');
+    }
+
+    public function markSessionResumed(string $sessionId): void
+    {
+        $this->updateSessionStatus($sessionId, 'running');
+    }
+
+    public function markSessionStopped(string $sessionId, ?string $message = null): void
+    {
+        $this->updateSessionStatus($sessionId, 'stopped', [
+            'completed_at' => gmdate('c'),
+            'error_message' => $message,
+        ]);
+    }
+
     public function markSessionCompleted(string $sessionId): void
     {
         $this->updateSessionStatus($sessionId, 'completed', ['completed_at' => gmdate('c')]);
@@ -278,6 +296,15 @@ SQL);
         }, array_reverse($events));
     }
 
+    public function sessionStatus(string $sessionId): ?string
+    {
+        $stmt = $this->pdo->prepare('SELECT status FROM sessions WHERE id = :id');
+        $stmt->execute([':id' => $sessionId]);
+        $status = $stmt->fetchColumn();
+
+        return is_string($status) ? $status : null;
+    }
+
     public function replaceBenchmarkScore(string $sessionId, string $modelId, string $benchmarkId, float $averageScore, float $capabilityAverage, float $qualityAverage, int $runs, array $summary): void
     {
         $stmt = $this->pdo->prepare(
@@ -376,6 +403,275 @@ SQL);
         }
 
         return $stmt->fetchAll();
+    }
+
+    /**
+     * @return array<string, int|float>
+     */
+    public function dashboardOverview(): array
+    {
+        $stmt = $this->pdo->query(<<<'SQL'
+SELECT
+    (SELECT COUNT(*) FROM sessions) AS total_sessions,
+    (SELECT COUNT(*) FROM sessions WHERE status = 'completed') AS completed_sessions,
+    (SELECT COUNT(*) FROM sessions WHERE status IN ('running', 'evaluating', 'paused')) AS active_sessions,
+    (SELECT COUNT(*) FROM sessions WHERE status = 'failed') AS failed_sessions,
+    (SELECT COUNT(*) FROM attempts) AS total_attempts,
+    (SELECT COUNT(*) FROM attempts WHERE status = 'completed') AS completed_attempts,
+    (SELECT COUNT(DISTINCT model_id) FROM model_scores) AS unique_models,
+    COALESCE((
+        SELECT ROUND(AVG(ms.overall_score), 2)
+        FROM model_scores ms
+        JOIN sessions s ON s.id = ms.session_id
+        WHERE s.status = 'completed'
+    ), 0) AS average_overall_score
+SQL);
+
+        if ($stmt === false) {
+            throw new \RuntimeException('Failed to fetch dashboard overview.');
+        }
+
+        $row = $stmt->fetch();
+        if ($row === false) {
+            return [
+                'total_sessions' => 0,
+                'completed_sessions' => 0,
+                'active_sessions' => 0,
+                'failed_sessions' => 0,
+                'total_attempts' => 0,
+                'completed_attempts' => 0,
+                'unique_models' => 0,
+                'average_overall_score' => 0.0,
+            ];
+        }
+
+        return [
+            'total_sessions' => (int) $row['total_sessions'],
+            'completed_sessions' => (int) $row['completed_sessions'],
+            'active_sessions' => (int) $row['active_sessions'],
+            'failed_sessions' => (int) $row['failed_sessions'],
+            'total_attempts' => (int) $row['total_attempts'],
+            'completed_attempts' => (int) $row['completed_attempts'],
+            'unique_models' => (int) $row['unique_models'],
+            'average_overall_score' => (float) $row['average_overall_score'],
+        ];
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function recentSessions(int $limit = 8): array
+    {
+        $stmt = $this->pdo->prepare(<<<'SQL'
+SELECT
+    s.id,
+    s.name,
+    s.provider,
+    s.status,
+    s.created_at,
+    s.completed_at,
+    (SELECT COUNT(*) FROM attempts a WHERE a.session_id = s.id) AS attempt_count,
+    (SELECT COUNT(*) FROM attempts a WHERE a.session_id = s.id AND a.status = 'completed') AS completed_attempt_count,
+    COALESCE((SELECT ROUND(AVG(ms.overall_score), 2) FROM model_scores ms WHERE ms.session_id = s.id), 0) AS average_score,
+    (SELECT ms.model_id FROM model_scores ms WHERE ms.session_id = s.id ORDER BY ms.overall_score DESC, ms.model_id ASC LIMIT 1) AS top_model_id,
+    (SELECT ms.overall_score FROM model_scores ms WHERE ms.session_id = s.id ORDER BY ms.overall_score DESC, ms.model_id ASC LIMIT 1) AS top_model_score
+FROM sessions s
+ORDER BY s.created_at DESC
+LIMIT :limit
+SQL);
+        $stmt->bindValue(':limit', max(1, $limit), PDO::PARAM_INT);
+        $stmt->execute();
+
+        return array_map(static function (array $row): array {
+            $row['attempt_count'] = (int) $row['attempt_count'];
+            $row['completed_attempt_count'] = (int) $row['completed_attempt_count'];
+            $row['average_score'] = (float) $row['average_score'];
+            $row['top_model_score'] = $row['top_model_score'] !== null ? (float) $row['top_model_score'] : null;
+
+            return $row;
+        }, $stmt->fetchAll());
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function benchmarkComparison(): array
+    {
+        $stmt = $this->pdo->query(<<<'SQL'
+SELECT
+    bs.benchmark_id,
+    bs.model_id,
+    ROUND(AVG(bs.average_score), 2) AS average_score,
+    ROUND(AVG(bs.capability_average), 2) AS capability_average,
+    ROUND(AVG(bs.quality_average), 2) AS quality_average,
+    SUM(bs.runs) AS total_runs,
+    COUNT(*) AS session_count
+FROM benchmark_scores bs
+JOIN sessions s ON s.id = bs.session_id
+WHERE s.status = 'completed'
+GROUP BY bs.benchmark_id, bs.model_id
+ORDER BY bs.benchmark_id ASC, average_score DESC, bs.model_id ASC
+SQL);
+
+        if ($stmt === false) {
+            throw new \RuntimeException('Failed to fetch benchmark comparison data.');
+        }
+
+        return array_map(static function (array $row): array {
+            $row['average_score'] = (float) $row['average_score'];
+            $row['capability_average'] = (float) $row['capability_average'];
+            $row['quality_average'] = (float) $row['quality_average'];
+            $row['total_runs'] = (int) $row['total_runs'];
+            $row['session_count'] = (int) $row['session_count'];
+
+            return $row;
+        }, $stmt->fetchAll());
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function syntheticMarioAnalytics(): array
+    {
+        $stmt = $this->pdo->prepare(<<<'SQL'
+SELECT a.model_id, a.total_score, a.metrics_json
+FROM attempts a
+JOIN sessions s ON s.id = a.session_id
+WHERE s.status = 'completed'
+  AND a.benchmark_id = :benchmark_id
+ORDER BY a.model_id ASC, a.run_number ASC
+SQL);
+        $stmt->execute([':benchmark_id' => 'mario_speedrun_synthetic']);
+        $rows = $stmt->fetchAll();
+
+        $overview = [
+            'total_runs' => 0,
+            'completed_runs' => 0,
+            'completion_rate' => 0.0,
+            'average_frames_completed' => null,
+            'average_deaths' => 0.0,
+            'average_invalid_actions' => 0.0,
+            'average_checkpoints_cleared' => 0.0,
+            'failure_reasons' => [],
+        ];
+
+        $framesTotal = 0;
+        $framesCount = 0;
+        $deathsTotal = 0;
+        $invalidTotal = 0;
+        $checkpointsTotal = 0;
+        $models = [];
+
+        foreach ($rows as $row) {
+            $metrics = Json::decode((string) $row['metrics_json']);
+            $summary = $metrics['synthetic_mario'] ?? null;
+            if (!is_array($summary)) {
+                continue;
+            }
+
+            $modelId = (string) $row['model_id'];
+            $completed = ($summary['completed'] ?? false) === true;
+            $framesUsed = (int) ($summary['frames_used'] ?? 0);
+            $deaths = (int) ($summary['deaths'] ?? 0);
+            $invalidActions = (int) ($summary['invalid_actions'] ?? 0);
+            $checkpointsCleared = (int) ($summary['checkpoints_cleared'] ?? 0);
+            $failureReason = (string) ($summary['failure_reason'] ?? '');
+
+            $overview['total_runs']++;
+            $deathsTotal += $deaths;
+            $invalidTotal += $invalidActions;
+            $checkpointsTotal += $checkpointsCleared;
+
+            if ($completed) {
+                $overview['completed_runs']++;
+                $framesTotal += $framesUsed;
+                $framesCount++;
+            } elseif ($failureReason !== '') {
+                $overview['failure_reasons'][$failureReason] = ($overview['failure_reasons'][$failureReason] ?? 0) + 1;
+            }
+
+            if (!isset($models[$modelId])) {
+                $models[$modelId] = [
+                    'model_id' => $modelId,
+                    'runs' => 0,
+                    'completed_runs' => 0,
+                    'completion_rate' => 0.0,
+                    'average_frames_completed' => null,
+                    'average_deaths' => 0.0,
+                    'average_invalid_actions' => 0.0,
+                    'average_checkpoints_cleared' => 0.0,
+                    'average_total_score' => 0.0,
+                    'failure_reasons' => [],
+                    '_frames_total' => 0,
+                    '_frames_count' => 0,
+                    '_deaths_total' => 0,
+                    '_invalid_total' => 0,
+                    '_checkpoints_total' => 0,
+                    '_score_total' => 0.0,
+                ];
+            }
+
+            $models[$modelId]['runs']++;
+            $models[$modelId]['_deaths_total'] += $deaths;
+            $models[$modelId]['_invalid_total'] += $invalidActions;
+            $models[$modelId]['_checkpoints_total'] += $checkpointsCleared;
+            $models[$modelId]['_score_total'] += (float) $row['total_score'];
+
+            if ($completed) {
+                $models[$modelId]['completed_runs']++;
+                $models[$modelId]['_frames_total'] += $framesUsed;
+                $models[$modelId]['_frames_count']++;
+            } elseif ($failureReason !== '') {
+                $models[$modelId]['failure_reasons'][$failureReason] = ($models[$modelId]['failure_reasons'][$failureReason] ?? 0) + 1;
+            }
+        }
+
+        if ($overview['total_runs'] > 0) {
+            $overview['completion_rate'] = round(($overview['completed_runs'] / $overview['total_runs']) * 100, 2);
+            $overview['average_deaths'] = round($deathsTotal / $overview['total_runs'], 2);
+            $overview['average_invalid_actions'] = round($invalidTotal / $overview['total_runs'], 2);
+            $overview['average_checkpoints_cleared'] = round($checkpointsTotal / $overview['total_runs'], 2);
+        }
+
+        if ($framesCount > 0) {
+            $overview['average_frames_completed'] = round($framesTotal / $framesCount, 2);
+        }
+
+        $modelRows = array_values(array_map(static function (array $row): array {
+            $row['completion_rate'] = $row['runs'] > 0
+                ? round(($row['completed_runs'] / $row['runs']) * 100, 2)
+                : 0.0;
+            $row['average_deaths'] = $row['runs'] > 0 ? round($row['_deaths_total'] / $row['runs'], 2) : 0.0;
+            $row['average_invalid_actions'] = $row['runs'] > 0 ? round($row['_invalid_total'] / $row['runs'], 2) : 0.0;
+            $row['average_checkpoints_cleared'] = $row['runs'] > 0 ? round($row['_checkpoints_total'] / $row['runs'], 2) : 0.0;
+            $row['average_total_score'] = $row['runs'] > 0 ? round($row['_score_total'] / $row['runs'], 2) : 0.0;
+            $row['average_frames_completed'] = $row['_frames_count'] > 0
+                ? round($row['_frames_total'] / $row['_frames_count'], 2)
+                : null;
+
+            unset(
+                $row['_frames_total'],
+                $row['_frames_count'],
+                $row['_deaths_total'],
+                $row['_invalid_total'],
+                $row['_checkpoints_total'],
+                $row['_score_total'],
+            );
+
+            return $row;
+        }, $models));
+
+        usort($modelRows, static function (array $left, array $right): int {
+            return [$right['completion_rate'], $left['average_total_score'], $left['model_id']]
+                <=> [$left['completion_rate'], $right['average_total_score'], $right['model_id']];
+        });
+
+        arsort($overview['failure_reasons']);
+
+        return [
+            'overview' => $overview,
+            'models' => $modelRows,
+        ];
     }
 
     public function sessionExportRows(string $sessionId): array

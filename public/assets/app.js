@@ -2,6 +2,7 @@ window.benchyApp = function benchyApp() {
     return {
         sidebarOpen: false,
         showBrandCopy: true,
+        sessionsRefreshedAt: Date.now(),
         providers: [],
         benchmarks: [],
         availableModels: [],
@@ -10,6 +11,7 @@ window.benchyApp = function benchyApp() {
         selectedSession: null,
         selectedAttempt: null,
         selectedAttemptEvents: [],
+        traceExpanded: false,
         eventSource: null,
         creatingSession: false,
         running: false,
@@ -67,11 +69,56 @@ window.benchyApp = function benchyApp() {
             const response = await fetch('/api/sessions');
             const data = await response.json();
             this.sessions = data.sessions || [];
+            this.sessionsRefreshedAt = Date.now();
         },
 
         async refreshSessionsFromUser() {
-            this.dismissBrandCopy();
             await this.refreshSessions();
+        },
+
+        async controlSession(action) {
+            if (!this.selectedSession) {
+                return;
+            }
+
+            const response = await fetch('/api/sessions/' + encodeURIComponent(this.selectedSession.id) + '/' + action, {
+                method: 'POST',
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                window.alert(data.error || 'Failed to update session state.');
+                return;
+            }
+
+            this.selectedSession = data.session;
+
+            if (action === 'pause') {
+                this.currentStatus = 'paused';
+            }
+
+            if (action === 'resume') {
+                this.currentStatus = 'running';
+                this.running = true;
+            }
+
+            if (action === 'stop') {
+                this.currentStatus = 'stopping';
+            }
+
+            await this.refreshSessions();
+        },
+
+        canPauseSelectedSession() {
+            return this.selectedSession && this.selectedSession.status === 'running';
+        },
+
+        canResumeSelectedSession() {
+            return this.selectedSession && this.selectedSession.status === 'paused';
+        },
+
+        canStopSelectedSession() {
+            return this.selectedSession && ['draft', 'running', 'paused', 'evaluating'].includes(this.selectedSession.status);
         },
 
         async refreshLeaderboard() {
@@ -98,6 +145,7 @@ window.benchyApp = function benchyApp() {
                 this.selectedSession = data.session;
                 this.selectedAttempt = null;
                 this.selectedAttemptEvents = [];
+                this.traceExpanded = false;
                 this.liveEvents = [];
                 this.liveOutput = '';
                 this.liveReasoning = '';
@@ -139,6 +187,7 @@ window.benchyApp = function benchyApp() {
         selectAttempt(attempt) {
             this.selectedAttempt = attempt;
             this.selectedAttemptEvents = [];
+            this.traceExpanded = false;
             void this.loadAttemptEvents(attempt.id);
         },
 
@@ -163,7 +212,7 @@ window.benchyApp = function benchyApp() {
                 this.handleStreamEvent(payload.event_type || 'message', payload);
             };
 
-            ['attempt_start', 'iteration', 'text_delta', 'reasoning_delta', 'tool_call', 'tool_result', 'attempt_captured', 'attempt_scored', 'attempt_failed', 'evaluation_start', 'session_complete', 'session_failed', 'fatal', 'model_start', 'end'].forEach((eventName) => {
+            ['attempt_start', 'iteration', 'text_delta', 'reasoning_delta', 'tool_call', 'tool_result', 'attempt_captured', 'attempt_scored', 'attempt_failed', 'evaluation_start', 'session_complete', 'session_failed', 'session_paused', 'session_resumed', 'session_stopped', 'fatal', 'model_start', 'end'].forEach((eventName) => {
                 this.eventSource.addEventListener(eventName, (event) => {
                     const payload = JSON.parse(event.data);
                     void this.handleStreamEvent(eventName, payload);
@@ -193,9 +242,32 @@ window.benchyApp = function benchyApp() {
                 await this.refreshSelectedSession(envelope.session_id, envelope.attempt_id, eventType !== 'model_start');
             }
 
+            if (eventType === 'session_paused') {
+                this.currentStatus = 'paused';
+                await this.refreshSelectedSession(envelope.session_id, envelope.attempt_id, false);
+            }
+
+            if (eventType === 'session_resumed') {
+                this.currentStatus = 'running';
+                this.running = true;
+                await this.refreshSelectedSession(envelope.session_id, envelope.attempt_id, false);
+            }
+
+            if (eventType === 'session_stopped') {
+                this.running = false;
+                this.currentStatus = 'stopped';
+                if (this.eventSource) {
+                    this.eventSource.close();
+                }
+                await this.refreshSelectedSession(envelope.session_id, envelope.attempt_id, false);
+                await this.refreshSessions();
+            }
+
             if (eventType === 'session_complete' || eventType === 'end') {
                 this.running = false;
-                this.currentStatus = 'completed';
+                this.currentStatus = eventType === 'end'
+                    ? (payload.status || 'completed')
+                    : 'completed';
                 if (this.eventSource) {
                     this.eventSource.close();
                 }
@@ -276,6 +348,9 @@ window.benchyApp = function benchyApp() {
                     return `quality ${payload.quality_score}, total ${payload.total_score}`;
                 case 'attempt_captured':
                     return `capability ${payload.capability_score}`;
+                case 'session_paused':
+                case 'session_resumed':
+                case 'session_stopped':
                 case 'session_failed':
                 case 'fatal':
                     return payload.message || 'Fatal error';
@@ -298,12 +373,45 @@ window.benchyApp = function benchyApp() {
             window.localStorage.setItem('benchy.hideBrandCopy', '1');
         },
 
+        formatBenchmarkLabel(value) {
+            return String(value || '')
+                .replace(/_/g, ' ')
+                .trim();
+        },
+
+        formatStatusLabel(value) {
+            const normalized = String(value || '').trim();
+            if (normalized.length === 0) {
+                return 'Unknown';
+            }
+
+            return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+        },
+
+        formatScore(value, max = 100) {
+            const numeric = Number(value || 0);
+            return Math.round(numeric) + '/' + max;
+        },
+
         formatJson(value) {
             try {
                 return JSON.stringify(value, null, 2);
             } catch (_error) {
                 return String(value || '');
             }
+        },
+
+        timeAgo(name, _tick) {
+            const match = String(name || '').match(/(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})/);
+            if (!match) return name;
+            const date = new Date(match[1].replace(' ', 'T'));
+            if (isNaN(date.getTime())) return name;
+            const secs = Math.floor((Date.now() - date.getTime()) / 1000);
+            if (secs < 60) return 'Just now';
+            if (secs < 3600) return Math.floor(secs / 60) + ' min ago';
+            if (secs < 86400) return Math.floor(secs / 3600) + ' hr ago';
+            if (secs < 604800) return Math.floor(secs / 86400) + ' days ago';
+            return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
         },
     };
 };

@@ -90,6 +90,16 @@ final class AppConfig
         return ['pwd', 'ls', 'cat', 'php'];
     }
 
+    public function syntheticMarioAttemptTimeoutSeconds(): int
+    {
+        return max(1, $this->int('SYNTHETIC_MARIO_ATTEMPT_TIMEOUT_SECONDS', 20));
+    }
+
+    public function sessionControlPollMilliseconds(): int
+    {
+        return max(50, $this->int('SESSION_CONTROL_POLL_MILLISECONDS', 250));
+    }
+
     public function providerApiKey(string $provider): string
     {
         return match ($provider) {

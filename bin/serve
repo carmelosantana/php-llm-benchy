@@ -3,5 +3,6 @@ set -euo pipefail
 
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8080}"
+WORKERS="${PHP_CLI_SERVER_WORKERS:-4}"
 
-php -S "$HOST:$PORT" -t public public/index.php
+PHP_CLI_SERVER_WORKERS="$WORKERS" php -S "$HOST:$PORT" -t public public/index.php
