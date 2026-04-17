@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CarmeloSantana\PHPLLMBenchy\Repository;
 
+use CarmeloSantana\PHPLLMBenchy\Config\SessionSeedConfiguration;
 use CarmeloSantana\PHPLLMBenchy\Support\Ids;
 use CarmeloSantana\PHPLLMBenchy\Support\Json;
 use PDO;
@@ -20,7 +21,7 @@ final class SessionRepository
         string $evaluationModel,
         array $benchmarks,
         int $runsPerBenchmark,
-        ?int $seed,
+        SessionSeedConfiguration $seedConfiguration,
     ): array {
         $sessionId = Ids::session();
         $now = gmdate('c');
@@ -31,13 +32,13 @@ final class SessionRepository
             'evaluation_model' => $evaluationModel,
             'benchmarks' => array_values($benchmarks),
             'runs_per_benchmark' => $runsPerBenchmark,
-            'seed' => $seed,
+            ...$seedConfiguration->toArray(),
         ];
 
         $this->pdo->beginTransaction();
 
         $stmt = $this->pdo->prepare(
-            'INSERT INTO sessions (id, name, provider, evaluation_model, runs_per_benchmark, seed, status, config_json, created_at, updated_at) VALUES (:id, :name, :provider, :evaluation_model, :runs_per_benchmark, :seed, :status, :config_json, :created_at, :updated_at)'
+            'INSERT INTO sessions (id, name, provider, evaluation_model, runs_per_benchmark, seed, seed_type, seed_frequency, status, config_json, created_at, updated_at) VALUES (:id, :name, :provider, :evaluation_model, :runs_per_benchmark, :seed, :seed_type, :seed_frequency, :status, :config_json, :created_at, :updated_at)'
         );
         $stmt->execute([
             ':id' => $sessionId,
@@ -45,7 +46,9 @@ final class SessionRepository
             ':provider' => $provider,
             ':evaluation_model' => $evaluationModel,
             ':runs_per_benchmark' => $runsPerBenchmark,
-            ':seed' => $seed,
+            ':seed' => $seedConfiguration->seed,
+            ':seed_type' => $seedConfiguration->type->value,
+            ':seed_frequency' => $seedConfiguration->frequency->value,
             ':status' => 'draft',
             ':config_json' => Json::encode($config),
             ':created_at' => $now,
@@ -92,6 +95,8 @@ SELECT
     s.evaluation_model,
     s.runs_per_benchmark,
     s.seed,
+    s.seed_type,
+    s.seed_frequency,
     s.status,
     s.error_message,
     s.created_at,
@@ -190,11 +195,11 @@ SQL);
         ]);
     }
 
-    public function createAttempt(string $sessionId, string $modelId, string $benchmarkId, int $runNumber, string $prompt): string
+    public function createAttempt(string $sessionId, string $modelId, string $benchmarkId, int $runNumber, string $prompt, ?int $effectiveSeed = null): string
     {
         $attemptId = Ids::attempt();
         $stmt = $this->pdo->prepare(
-            'INSERT INTO attempts (id, session_id, model_id, benchmark_id, run_number, status, prompt, started_at) VALUES (:id, :session_id, :model_id, :benchmark_id, :run_number, :status, :prompt, :started_at)'
+            'INSERT INTO attempts (id, session_id, model_id, benchmark_id, run_number, effective_seed, status, prompt, started_at) VALUES (:id, :session_id, :model_id, :benchmark_id, :run_number, :effective_seed, :status, :prompt, :started_at)'
         );
         $stmt->execute([
             ':id' => $attemptId,
@@ -202,6 +207,7 @@ SQL);
             ':model_id' => $modelId,
             ':benchmark_id' => $benchmarkId,
             ':run_number' => $runNumber,
+            ':effective_seed' => $effectiveSeed,
             ':status' => 'running',
             ':prompt' => $prompt,
             ':started_at' => gmdate('c'),
@@ -482,14 +488,14 @@ SQL);
         $stmt->bindValue(':limit', max(1, $limit), PDO::PARAM_INT);
         $stmt->execute();
 
-        return array_map(static function (array $row): array {
+        return array_values(array_map(static function (array $row): array {
             $row['attempt_count'] = (int) $row['attempt_count'];
             $row['completed_attempt_count'] = (int) $row['completed_attempt_count'];
             $row['average_score'] = (float) $row['average_score'];
             $row['top_model_score'] = $row['top_model_score'] !== null ? (float) $row['top_model_score'] : null;
 
             return $row;
-        }, $stmt->fetchAll());
+        }, $stmt->fetchAll()));
     }
 
     /**
@@ -517,7 +523,7 @@ SQL);
             throw new \RuntimeException('Failed to fetch benchmark comparison data.');
         }
 
-        return array_map(static function (array $row): array {
+        return array_values(array_map(static function (array $row): array {
             $row['average_score'] = (float) $row['average_score'];
             $row['capability_average'] = (float) $row['capability_average'];
             $row['quality_average'] = (float) $row['quality_average'];
@@ -525,7 +531,7 @@ SQL);
             $row['session_count'] = (int) $row['session_count'];
 
             return $row;
-        }, $stmt->fetchAll());
+        }, $stmt->fetchAll()));
     }
 
     /**
@@ -638,13 +644,11 @@ SQL);
         }
 
         $modelRows = array_values(array_map(static function (array $row): array {
-            $row['completion_rate'] = $row['runs'] > 0
-                ? round(($row['completed_runs'] / $row['runs']) * 100, 2)
-                : 0.0;
-            $row['average_deaths'] = $row['runs'] > 0 ? round($row['_deaths_total'] / $row['runs'], 2) : 0.0;
-            $row['average_invalid_actions'] = $row['runs'] > 0 ? round($row['_invalid_total'] / $row['runs'], 2) : 0.0;
-            $row['average_checkpoints_cleared'] = $row['runs'] > 0 ? round($row['_checkpoints_total'] / $row['runs'], 2) : 0.0;
-            $row['average_total_score'] = $row['runs'] > 0 ? round($row['_score_total'] / $row['runs'], 2) : 0.0;
+            $row['completion_rate'] = round(($row['completed_runs'] / $row['runs']) * 100, 2);
+            $row['average_deaths'] = round($row['_deaths_total'] / $row['runs'], 2);
+            $row['average_invalid_actions'] = round($row['_invalid_total'] / $row['runs'], 2);
+            $row['average_checkpoints_cleared'] = round($row['_checkpoints_total'] / $row['runs'], 2);
+            $row['average_total_score'] = round($row['_score_total'] / $row['runs'], 2);
             $row['average_frames_completed'] = $row['_frames_count'] > 0
                 ? round($row['_frames_total'] / $row['_frames_count'], 2)
                 : null;
@@ -683,6 +687,7 @@ SELECT
     a.model_id,
     a.benchmark_id,
     a.run_number,
+    a.effective_seed,
     a.status,
     a.capability_score,
     a.quality_score,

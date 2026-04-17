@@ -19,6 +19,9 @@ use CarmeloSantana\PHPLLMBenchy\Benchmark\BenchmarkDefinition;
 use CarmeloSantana\PHPLLMBenchy\Benchmark\BenchmarkRegistry;
 use CarmeloSantana\PHPLLMBenchy\Benchmark\SyntheticMarioBenchmarkFixture;
 use CarmeloSantana\PHPLLMBenchy\Config\AppConfig;
+use CarmeloSantana\PHPLLMBenchy\Config\SeedFrequency;
+use CarmeloSantana\PHPLLMBenchy\Config\SeedType;
+use CarmeloSantana\PHPLLMBenchy\Config\SessionSeedConfiguration;
 use CarmeloSantana\PHPLLMBenchy\Evaluation\ResponseEvaluator;
 use CarmeloSantana\PHPLLMBenchy\Repository\SessionRepository;
 use CarmeloSantana\PHPLLMBenchy\Toolkit\BenchmarkTelemetryAwareToolkit;
@@ -33,16 +36,20 @@ final class BenchmarkRunner
      */
     private readonly \Closure $pauseWaiter;
 
+    private readonly AttemptSeedResolver $seedResolver;
+
     public function __construct(
         private readonly AppConfig $config,
         private readonly SessionRepository $repository,
         private readonly BenchmarkRegistry $registry,
         private readonly ModelProviderFactory $providerFactory,
         ?\Closure $pauseWaiter = null,
+        ?AttemptSeedResolver $seedResolver = null,
     ) {
         $this->pauseWaiter = $pauseWaiter ?? static function (int $microseconds): void {
             usleep($microseconds);
         };
+        $this->seedResolver = $seedResolver ?? new AttemptSeedResolver();
     }
 
     /**
@@ -70,9 +77,12 @@ final class BenchmarkRunner
         }
 
         $attemptPayloads = [];
+        $testIndex = 0;
+        $runIndex = 0;
+        $seedConfiguration = $this->seedConfigurationFromSession($session);
 
         try {
-            foreach ($session['models'] as $modelRow) {
+            foreach ($session['models'] as $modelIndex => $modelRow) {
                 if (!$this->waitForRunnableSession($sessionId, $stream)) {
                     return;
                 }
@@ -80,7 +90,7 @@ final class BenchmarkRunner
                 $modelId = (string) $modelRow['model_id'];
                 $this->emit($stream, $sessionId, null, 'model_start', ['model_id' => $modelId]);
 
-                foreach ($session['benchmarks'] as $benchmarkRow) {
+                foreach ($session['benchmarks'] as $benchmarkIndex => $benchmarkRow) {
                     if (!$this->waitForRunnableSession($sessionId, $stream)) {
                         return;
                     }
@@ -98,16 +108,22 @@ final class BenchmarkRunner
                             return;
                         }
 
+                        $effectiveSeed = $this->seedResolver->resolve($seedConfiguration, $testIndex, $runIndex);
+
                         $attemptPayloads[] = $this->runAttempt(
                             $sessionId,
                             (string) $session['provider'],
                             $modelId,
                             $definition,
                             $runNumber,
-                            $session['seed'] !== null ? (int) $session['seed'] : null,
+                            $effectiveSeed,
                             $stream,
                         );
+
+                        $runIndex++;
                     }
+
+                    $testIndex++;
                 }
             }
 
@@ -117,7 +133,7 @@ final class BenchmarkRunner
 
             $this->repository->markSessionEvaluating($sessionId);
             $this->emit($stream, $sessionId, null, 'evaluation_start', ['message' => 'Scoring captured responses']);
-            if (!$this->evaluateAttempts($sessionId, (string) $session['provider'], (string) $session['evaluation_model'], $session['seed'] !== null ? (int) $session['seed'] : null, $attemptPayloads, $stream)) {
+            if (!$this->evaluateAttempts($sessionId, (string) $session['provider'], (string) $session['evaluation_model'], $seedConfiguration->seed, $attemptPayloads, $stream)) {
                 if ($this->repository->sessionStatus($sessionId) !== 'stopped') {
                     $this->repository->markSessionStopped($sessionId, 'Session stopped before evaluation completed.');
                 }
@@ -140,12 +156,13 @@ final class BenchmarkRunner
      */
     private function runAttempt(string $sessionId, string $providerName, string $modelId, BenchmarkDefinition $benchmark, int $runNumber, ?int $seed, \Closure $stream): array
     {
-        $attemptId = $this->repository->createAttempt($sessionId, $modelId, $benchmark->id, $runNumber, $benchmark->prompt);
+        $attemptId = $this->repository->createAttempt($sessionId, $modelId, $benchmark->id, $runNumber, $benchmark->prompt, $seed);
         $this->emit($stream, $sessionId, $attemptId, 'attempt_start', [
             'model_id' => $modelId,
             'benchmark_id' => $benchmark->id,
             'run_number' => $runNumber,
             'prompt' => $benchmark->prompt,
+            'seed' => $seed,
         ]);
 
         $provider = $this->providerFactory->create($providerName, $modelId, $seed);
@@ -227,6 +244,7 @@ final class BenchmarkRunner
                     'model_id' => $modelId,
                     'benchmark_id' => $benchmark->id,
                     'run_number' => $runNumber,
+                    'effective_seed' => $seed,
                     'response_text' => '',
                     'capability_score' => 0.0,
                     'metrics' => $metrics,
@@ -254,6 +272,7 @@ final class BenchmarkRunner
             $this->emit($stream, $sessionId, $attemptId, 'attempt_captured', [
                 'capability_score' => $capability['score'],
                 'iterations' => $output->iterations,
+                'seed' => $seed,
             ]);
 
             return [
@@ -261,6 +280,7 @@ final class BenchmarkRunner
                 'model_id' => $modelId,
                 'benchmark_id' => $benchmark->id,
                 'run_number' => $runNumber,
+                'effective_seed' => $seed,
                 'response_text' => $output->content,
                 'capability_score' => (float) $capability['score'],
                 'metrics' => $metrics,
@@ -287,6 +307,7 @@ final class BenchmarkRunner
                 'model_id' => $modelId,
                 'benchmark_id' => $benchmark->id,
                 'run_number' => $runNumber,
+                'effective_seed' => $seed,
                 'response_text' => '',
                 'capability_score' => 0.0,
                 'metrics' => ['error' => $e->getMessage()],
@@ -549,6 +570,10 @@ final class BenchmarkRunner
     /**
      * @param \Closure(string, array<string, mixed>): void $stream
      */
+    /**
+     * @phpstan-impure
+     * @param \Closure(string, array<string, mixed>): void $stream
+     */
     private function waitForRunnableSession(string $sessionId, \Closure $stream, bool $allowPause = true): bool
     {
         $pauseEmitted = false;
@@ -603,5 +628,24 @@ final class BenchmarkRunner
 
         $this->repository->appendEvent($sessionId, $attemptId, $eventType, $payload);
         $stream($eventType, $envelope);
+    }
+
+    /**
+     * @param array<string, mixed> $session
+     */
+    private function seedConfigurationFromSession(array $session): SessionSeedConfiguration
+    {
+        $type = is_string($session['seed_type'] ?? null)
+            ? SeedType::tryFrom((string) $session['seed_type'])
+            : null;
+        $frequency = is_string($session['seed_frequency'] ?? null)
+            ? SeedFrequency::tryFrom((string) $session['seed_frequency'])
+            : null;
+
+        return new SessionSeedConfiguration(
+            seed: $session['seed'] !== null ? (int) $session['seed'] : null,
+            type: $type ?? $this->config->defaultSeedType(),
+            frequency: $frequency ?? $this->config->defaultSeedFrequency(),
+        );
     }
 }

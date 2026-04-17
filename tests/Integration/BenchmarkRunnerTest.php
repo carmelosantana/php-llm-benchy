@@ -8,6 +8,9 @@ use CarmeloSantana\PHPAgents\Provider\Response;
 use CarmeloSantana\PHPAgents\Enum\ProviderFinishReason;
 use CarmeloSantana\PHPLLMBenchy\Benchmark\BenchmarkRegistry;
 use CarmeloSantana\PHPLLMBenchy\Config\AppConfig;
+use CarmeloSantana\PHPLLMBenchy\Config\SeedFrequency;
+use CarmeloSantana\PHPLLMBenchy\Config\SeedType;
+use CarmeloSantana\PHPLLMBenchy\Config\SessionSeedConfiguration;
 use CarmeloSantana\PHPLLMBenchy\Repository\SessionRepository;
 use CarmeloSantana\PHPLLMBenchy\Runner\BenchmarkRunner;
 use CarmeloSantana\PHPLLMBenchy\Runner\ModelProviderFactory;
@@ -32,7 +35,7 @@ it('fails a synthetic mario attempt with a timeout instead of hanging', function
     $factory = new ModelProviderFactory($config, static fn(string $provider, string $model, ?int $seed): ProviderInterface => fakeStreamingProvider($model, 'timeout'));
     $runner = new BenchmarkRunner($config, $repository, $registry, $factory);
 
-    $session = $repository->createSession('ollama', ['fake-model'], 'fake-model', ['mario_speedrun_synthetic'], 1, 7);
+    $session = $repository->createSession('ollama', ['fake-model'], 'fake-model', ['mario_speedrun_synthetic'], 1, new SessionSeedConfiguration(7, SeedType::Fixed, SeedFrequency::PerSession));
     $events = [];
 
     $runner->runSession($session['id'], static function (string $eventType, array $payload) use (&$events): void {
@@ -42,6 +45,10 @@ it('fails a synthetic mario attempt with a timeout instead of hanging', function
     $stored = $repository->getSession($session['id']);
 
     expect($stored)->not->toBeNull();
+    if ($stored === null) {
+        throw new RuntimeException('Expected stored session.');
+    }
+
     expect($stored['attempts'])->toHaveCount(1)
         ->and($stored['attempts'][0]['status'])->toBe('failed')
         ->and($stored['attempts'][0]['metrics']['control_reason'])->toBe('timeout')
@@ -82,7 +89,7 @@ it('pauses and resumes a session between attempts without duplicating work', fun
         },
     );
 
-    $session = $repository->createSession('ollama', ['fake-model'], 'fake-model', ['creative_story', 'poem'], 1, 7);
+    $session = $repository->createSession('ollama', ['fake-model'], 'fake-model', ['creative_story', 'poem'], 1, new SessionSeedConfiguration(7, SeedType::Fixed, SeedFrequency::PerSession));
     $paused = false;
     $events = [];
 
@@ -98,6 +105,10 @@ it('pauses and resumes a session between attempts without duplicating work', fun
     $stored = $repository->getSession($session['id']);
 
     expect($stored)->not->toBeNull();
+    if ($stored === null) {
+        throw new RuntimeException('Expected stored session.');
+    }
+
     expect($pauseWaiterCalls)->toBeGreaterThan(0)
         ->and($stored['status'])->toBe('completed')
         ->and($stored['attempts'])->toHaveCount(2)
@@ -122,7 +133,7 @@ it('stops a session after capture and skips evaluation', function (): void {
     $factory = new ModelProviderFactory($config, static fn(string $provider, string $model, ?int $seed): ProviderInterface => fakeStreamingProvider($model, 'text'));
     $runner = new BenchmarkRunner($config, $repository, $registry, $factory);
 
-    $session = $repository->createSession('ollama', ['fake-model'], 'fake-model', ['creative_story'], 1, 7);
+    $session = $repository->createSession('ollama', ['fake-model'], 'fake-model', ['creative_story'], 1, new SessionSeedConfiguration(7, SeedType::Fixed, SeedFrequency::PerSession));
 
     $runner->runSession($session['id'], function (string $eventType, array $payload) use ($repository, $session): void {
         if ($eventType === 'attempt_captured') {
@@ -133,11 +144,74 @@ it('stops a session after capture and skips evaluation', function (): void {
     $stored = $repository->getSession($session['id']);
 
     expect($stored)->not->toBeNull();
+    if ($stored === null) {
+        throw new RuntimeException('Expected stored session.');
+    }
+
     expect($stored['status'])->toBe('stopped')
         ->and($stored['attempts'])->toHaveCount(1)
         ->and($stored['attempts'][0]['status'])->toBe('captured')
         ->and($stored['benchmark_scores'])->toHaveCount(0)
         ->and($stored['model_scores'])->toHaveCount(0);
+});
+
+it('uses iterative per-run seeds for attempts and keeps evaluation on the base seed', function (): void {
+    $databasePath = sys_get_temp_dir() . '/php-llm-benchy-tests/db-' . uniqid('', true) . '.sqlite';
+    if (!is_dir(dirname($databasePath))) {
+        mkdir(dirname($databasePath), 0755, true);
+    }
+
+    putenv('DATABASE_PATH=' . $databasePath);
+    $_ENV['DATABASE_PATH'] = $databasePath;
+
+    $config = new AppConfig(dirname(__DIR__, 2));
+    $database = new Database($config);
+    $database->migrate();
+    $repository = new SessionRepository($database->pdo());
+    $registry = new BenchmarkRegistry();
+    $providerCalls = [];
+    $factory = new ModelProviderFactory(
+        $config,
+        static function (string $provider, string $model, ?int $seed) use (&$providerCalls): ProviderInterface {
+            $providerCalls[] = ['provider' => $provider, 'model' => $model, 'seed' => $seed];
+
+            return fakeStreamingProvider($model, 'text');
+        },
+    );
+    $runner = new BenchmarkRunner($config, $repository, $registry, $factory);
+
+    $session = $repository->createSession(
+        'ollama',
+        ['fake-model'],
+        'judge-model',
+        ['creative_story', 'poem'],
+        2,
+        new SessionSeedConfiguration(7, SeedType::Iterative, SeedFrequency::PerRun),
+    );
+
+    $events = [];
+    $runner->runSession($session['id'], static function (string $eventType, array $payload) use (&$events): void {
+        $events[] = [$eventType, $payload];
+    });
+
+    $stored = $repository->getSession($session['id']);
+
+    expect($stored)->not->toBeNull();
+    if ($stored === null) {
+        throw new RuntimeException('Expected stored session.');
+    }
+
+    expect(array_column($stored['attempts'], 'effective_seed'))->toBe([7, 8, 9, 10]);
+
+    $attemptStartSeeds = array_map(
+        static fn(array $event): int|null => $event[1]['payload']['seed'] ?? null,
+        array_values(array_filter($events, static fn(array $event): bool => $event[0] === 'attempt_start')),
+    );
+
+    expect($attemptStartSeeds)->toBe([7, 8, 9, 10]);
+    expect($providerCalls)->toHaveCount(5)
+        ->and(array_column(array_filter($providerCalls, static fn(array $call): bool => $call['model'] === 'fake-model'), 'seed'))->toBe([7, 8, 9, 10])
+        ->and(array_column(array_filter($providerCalls, static fn(array $call): bool => $call['model'] === 'judge-model'), 'seed'))->toBe([7]);
 });
 
 function fakeStreamingProvider(string $model, string $mode): ProviderInterface

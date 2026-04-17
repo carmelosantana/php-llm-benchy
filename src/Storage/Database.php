@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     evaluation_model TEXT NOT NULL,
     runs_per_benchmark INTEGER NOT NULL,
     seed INTEGER NULL,
+    seed_type TEXT NOT NULL DEFAULT 'fixed',
+    seed_frequency TEXT NOT NULL DEFAULT 'per_session',
     status TEXT NOT NULL,
     config_json TEXT NOT NULL,
     error_message TEXT NULL,
@@ -86,6 +88,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     model_id TEXT NOT NULL,
     benchmark_id TEXT NOT NULL,
     run_number INTEGER NOT NULL,
+    effective_seed INTEGER NULL,
     status TEXT NOT NULL,
     prompt TEXT NOT NULL,
     response_text TEXT NOT NULL DEFAULT '',
@@ -144,8 +147,28 @@ CREATE TABLE IF NOT EXISTS model_scores (
 )
 SQL);
 
+        $this->ensureColumn($pdo, 'sessions', 'seed_type', "TEXT NOT NULL DEFAULT 'fixed'");
+        $this->ensureColumn($pdo, 'sessions', 'seed_frequency', "TEXT NOT NULL DEFAULT 'per_session'");
+        $this->ensureColumn($pdo, 'attempts', 'effective_seed', 'INTEGER NULL');
+
         $pdo->exec('CREATE INDEX IF NOT EXISTS idx_attempts_session ON attempts(session_id)');
         $pdo->exec('CREATE INDEX IF NOT EXISTS idx_attempts_session_model ON attempts(session_id, model_id)');
         $pdo->exec('CREATE INDEX IF NOT EXISTS idx_events_session ON attempt_events(session_id, id)');
+    }
+
+    private function ensureColumn(PDO $pdo, string $table, string $column, string $definition): void
+    {
+        $stmt = $pdo->query(sprintf('PRAGMA table_info(%s)', $table));
+        if ($stmt === false) {
+            throw new \RuntimeException(sprintf('Unable to inspect schema for table "%s".', $table));
+        }
+
+        foreach ($stmt->fetchAll() as $row) {
+            if (($row['name'] ?? null) === $column) {
+                return;
+            }
+        }
+
+        $pdo->exec(sprintf('ALTER TABLE %s ADD COLUMN %s %s', $table, $column, $definition));
     }
 }

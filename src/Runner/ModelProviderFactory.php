@@ -11,9 +11,6 @@ use CarmeloSantana\PHPLLMBenchy\Config\AppConfig;
 
 final readonly class ModelProviderFactory
 {
-    /**
-     * @var (\Closure(string, string, ?int): ProviderInterface)|null
-     */
     public function __construct(
         private AppConfig $config,
         private ?\Closure $resolver = null,
