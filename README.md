@@ -18,7 +18,7 @@
 
 ## What it does
 
-- Creates benchmark sessions with a provider, one or more candidate models, one evaluation model, a benchmark selection, run count, and seed.
+- Creates benchmark sessions with a provider, one or more candidate models, one evaluation model, a benchmark selection, run count, and a configurable seed policy.
 - Discovers models dynamically from the provider model API. v1 is wired for Ollama at `http://ollama:11434/v1`.
 - Runs models sequentially, captures raw response text, reasoning deltas, and tool activity, then evaluates quality in a second pass.
 - Persists sessions, attempts, stream events, benchmark averages, model rollups, and CSV export data in SQLite.
@@ -55,6 +55,31 @@ V1 ships with eight benchmarks.
 - Poem quality
 
 > The Mario benchmark is synthetic. It reuses php-plays-style state and control semantics, but it does not launch a real emulator or ROM.
+
+## Seed behavior
+
+The session form lets you choose both a seed type and a seed change frequency.
+
+### Seed types
+
+- Random: Benchy generates a random base seed when the session is created. The seed input is locked in the UI. If you choose `Per Test` or `Per Run`, Benchy derives different effective seeds from that random base and shows the active seed in the live console as each attempt starts.
+- Fixed: You provide one explicit non-negative seed. Fixed mode always uses the same seed for the entire session, so the frequency selector is disabled.
+- Iterative: You provide the starting seed. Benchy increments that value by `1` whenever the selected frequency boundary changes.
+
+### Seed change frequency
+
+- Per Session: One effective seed is reused for all attempts in the session.
+- Per Test: A new effective seed is chosen for each model and benchmark pair. If a model runs the same benchmark twice, both runs reuse that test-level seed before Benchy advances to the next test.
+- Per Run: Every individual attempt gets its own effective seed.
+
+### Examples
+
+- Fixed + Per Session: Seed `42` is used for every attempt in the session.
+- Iterative + Per Test: Starting from `42`, the first model-and-benchmark pair uses `42`, the next pair uses `43`, then `44`, and so on.
+- Iterative + Per Run: Starting from `42` with four total attempts results in `42`, `43`, `44`, and `45`.
+- Random + Per Run: Benchy creates one random base seed for the session, derives a different effective seed for every run, and displays each one in the live logs.
+
+The evaluation model stays on the stable session base seed. Candidate model attempts record the effective seed used for that attempt in both SQLite and the streamed trace events.
 
 ## Requirements
 
@@ -166,6 +191,7 @@ composer analyse
 - Model runs are sequential by design.
 - Evaluation happens after raw capture so the evaluation model can stay hot.
 - Full trace persistence is enabled, including tool calls, tool results, streamed text deltas, and reasoning deltas when the model emits them.
+- Attempt traces include the effective seed used for each run, so live logs and stored history match the exact benchmark execution path.
 - The shell benchmark is restricted to an allowlist and runs only inside the configured sandbox directory.
 - The current server setup uses PHP's built-in server. It is fine for local development, but it is not intended as a production deployment target.
 

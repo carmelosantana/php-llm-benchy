@@ -53,6 +53,20 @@ final class AppConfig
         return $seed === null || $seed === '' ? null : (int) $seed;
     }
 
+    public function defaultSeedType(): SeedType
+    {
+        $value = $this->nullableString('DEFAULT_SEED_TYPE');
+
+        return SeedType::tryFrom((string) $value) ?? SeedType::Fixed;
+    }
+
+    public function defaultSeedFrequency(): SeedFrequency
+    {
+        $value = $this->nullableString('DEFAULT_SEED_FREQUENCY');
+
+        return SeedFrequency::tryFrom((string) $value) ?? SeedFrequency::PerSession;
+    }
+
     public function defaultRunsPerBenchmark(): int
     {
         return max(1, $this->int('DEFAULT_RUNS_PER_BENCHMARK', 1));

@@ -86,6 +86,11 @@ window.sessionDetailPage = function sessionDetailPage(sessionId) {
                     value: averageBenchmarkScore,
                     copy: 'Average across model benchmark summaries',
                 },
+                {
+                    label: 'Base Seed',
+                    value: this.formatSeed(this.session.seed),
+                    copy: this.seedPolicyCopy(this.session),
+                },
             ];
         },
 
@@ -162,6 +167,11 @@ window.sessionDetailPage = function sessionDetailPage(sessionId) {
                     copy: 'Capability + rubric score',
                 },
                 {
+                    label: 'Effective Seed',
+                    value: this.formatSeed(attempt?.effective_seed),
+                    copy: this.seedPolicyCopy(this.session),
+                },
+                {
                     label: 'Iterations',
                     value: metrics.iterations ?? '—',
                     copy: 'Agent loop count',
@@ -195,6 +205,25 @@ window.sessionDetailPage = function sessionDetailPage(sessionId) {
         formatScore(value, max = 100) {
             const numeric = Number(value || 0);
             return Math.round(numeric) + '/' + max;
+        },
+
+        formatSeed(value) {
+            return value === null || value === undefined || value === '' ? '—' : String(value);
+        },
+
+        seedPolicyCopy(session) {
+            if (!session) {
+                return 'No seed policy recorded';
+            }
+
+            const type = String(session.seed_type || session.config?.seed_type || 'fixed').replace(/_/g, ' ');
+            const frequency = String(session.seed_frequency || session.config?.seed_frequency || 'per_session').replace(/_/g, ' ');
+
+            if (type === 'fixed') {
+                return 'Fixed seed for the whole session';
+            }
+
+            return 'Seed policy: ' + type + ' • ' + frequency;
         },
 
         formatJson(value) {

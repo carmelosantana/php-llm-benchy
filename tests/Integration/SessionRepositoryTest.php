@@ -3,6 +3,9 @@
 declare(strict_types=1);
 
 use CarmeloSantana\PHPLLMBenchy\Config\AppConfig;
+use CarmeloSantana\PHPLLMBenchy\Config\SeedFrequency;
+use CarmeloSantana\PHPLLMBenchy\Config\SeedType;
+use CarmeloSantana\PHPLLMBenchy\Config\SessionSeedConfiguration;
 use CarmeloSantana\PHPLLMBenchy\Repository\SessionRepository;
 use CarmeloSantana\PHPLLMBenchy\Storage\Database;
 
@@ -26,16 +29,21 @@ it('persists sessions, attempts, events, and aggregate scores', function (): voi
         'llama3.2',
         ['tool_use', 'poem'],
         2,
-        4242,
+        new SessionSeedConfiguration(4242, SeedType::Iterative, SeedFrequency::PerRun),
     );
 
     expect($session['provider'])->toBe('ollama')
         ->and($session['models'])->toHaveCount(2)
-        ->and($session['benchmarks'])->toHaveCount(2);
+        ->and($session['benchmarks'])->toHaveCount(2)
+        ->and($session['seed'])->toBe(4242)
+        ->and($session['seed_type'])->toBe('iterative')
+        ->and($session['seed_frequency'])->toBe('per_run')
+        ->and($session['config']['seed_type'])->toBe('iterative')
+        ->and($session['config']['seed_frequency'])->toBe('per_run');
 
     $repository->markSessionRunning($session['id']);
 
-    $attemptId = $repository->createAttempt($session['id'], 'llama3.2', 'tool_use', 1, 'Use the tool and answer with the total.');
+    $attemptId = $repository->createAttempt($session['id'], 'llama3.2', 'tool_use', 1, 'Use the tool and answer with the total.', 4243);
     $repository->appendEvent($session['id'], $attemptId, 'tool_call', ['name' => 'add_numbers', 'arguments' => ['numbers' => '17,25,8']]);
     $repository->completeAttempt(
         $attemptId,
@@ -70,17 +78,21 @@ it('persists sessions, attempts, events, and aggregate scores', function (): voi
     $exportRows = $repository->sessionExportRows($session['id']);
 
     expect($stored)->not->toBeNull();
-    /** @var array<string, mixed> $stored */
+    if ($stored === null) {
+        throw new RuntimeException('Expected stored session.');
+    }
 
     expect($stored)->not->toBeNull()
         ->and($stored['status'])->toBe('completed')
         ->and($stored['attempts'])->toHaveCount(1)
+        ->and($stored['attempts'][0]['effective_seed'])->toBe(4243)
         ->and((float) $stored['attempts'][0]['total_score'])->toBe(90.0)
         ->and((float) $stored['model_scores'][0]['overall_score'])->toBe(90.0)
         ->and($events)->toHaveCount(1)
         ->and($leaderboard)->toHaveCount(1)
         ->and($leaderboard[0]['model_id'])->toBe('llama3.2')
-        ->and($exportRows)->toHaveCount(1);
+        ->and($exportRows)->toHaveCount(1)
+        ->and((int) $exportRows[0]['effective_seed'])->toBe(4243);
 });
 
 it('builds dashboard aggregates including synthetic mario analytics', function (): void {
@@ -104,12 +116,12 @@ it('builds dashboard aggregates including synthetic mario analytics', function (
         'llama3.2',
         ['mario_speedrun_synthetic', 'tool_use'],
         1,
-        7,
+        new SessionSeedConfiguration(7, SeedType::Fixed, SeedFrequency::PerSession),
     );
 
     $repository->markSessionRunning($session['id']);
 
-    $marioSuccessAttempt = $repository->createAttempt($session['id'], 'llama3.2', 'mario_speedrun_synthetic', 1, 'Finish fast.');
+    $marioSuccessAttempt = $repository->createAttempt($session['id'], 'llama3.2', 'mario_speedrun_synthetic', 1, 'Finish fast.', 7);
     $repository->completeAttempt(
         $marioSuccessAttempt,
         'captured',
@@ -133,7 +145,7 @@ it('builds dashboard aggregates including synthetic mario analytics', function (
     );
     $repository->updateAttemptScores($marioSuccessAttempt, ['total' => 44], 44.0, 92.0);
 
-    $marioFailAttempt = $repository->createAttempt($session['id'], 'qwen2.5', 'mario_speedrun_synthetic', 1, 'Finish fast.');
+    $marioFailAttempt = $repository->createAttempt($session['id'], 'qwen2.5', 'mario_speedrun_synthetic', 1, 'Finish fast.', 7);
     $repository->completeAttempt(
         $marioFailAttempt,
         'captured',
@@ -157,7 +169,7 @@ it('builds dashboard aggregates including synthetic mario analytics', function (
     );
     $repository->updateAttemptScores($marioFailAttempt, ['total' => 20], 20.0, 24.0);
 
-    $toolAttempt = $repository->createAttempt($session['id'], 'llama3.2', 'tool_use', 1, 'Use the tool.');
+    $toolAttempt = $repository->createAttempt($session['id'], 'llama3.2', 'tool_use', 1, 'Use the tool.', 7);
     $repository->completeAttempt(
         $toolAttempt,
         'captured',
@@ -216,7 +228,7 @@ it('supports paused, resumed, and stopped session states', function (): void {
     $database->migrate();
 
     $repository = new SessionRepository($database->pdo());
-    $session = $repository->createSession('ollama', ['llama3.2'], 'llama3.2', ['tool_use'], 1, 7);
+    $session = $repository->createSession('ollama', ['llama3.2'], 'llama3.2', ['tool_use'], 1, new SessionSeedConfiguration(7, SeedType::Fixed, SeedFrequency::PerSession));
 
     $repository->markSessionRunning($session['id']);
     $repository->markSessionPaused($session['id']);
@@ -229,7 +241,12 @@ it('supports paused, resumed, and stopped session states', function (): void {
 
     $stored = $repository->getSession($session['id']);
     expect($stored)->not->toBeNull()
-        ->and($stored['status'])->toBe('stopped')
+        ;
+    if ($stored === null) {
+        throw new RuntimeException('Expected stored session.');
+    }
+
+    expect($stored['status'])->toBe('stopped')
         ->and($stored['error_message'])->toBe('Stopped by user.')
         ->and($stored['completed_at'])->not->toBeNull();
 });

@@ -6,6 +6,9 @@ namespace CarmeloSantana\PHPLLMBenchy\Http;
 
 use CarmeloSantana\PHPLLMBenchy\Benchmark\BenchmarkRegistry;
 use CarmeloSantana\PHPLLMBenchy\Config\AppConfig;
+use CarmeloSantana\PHPLLMBenchy\Config\SeedFrequency;
+use CarmeloSantana\PHPLLMBenchy\Config\SeedType;
+use CarmeloSantana\PHPLLMBenchy\Config\SessionSeedConfigurationValidator;
 use CarmeloSantana\PHPLLMBenchy\Repository\SessionRepository;
 use CarmeloSantana\PHPLLMBenchy\Runner\BenchmarkRunner;
 use CarmeloSantana\PHPLLMBenchy\Runner\ModelProviderFactory;
@@ -43,8 +46,12 @@ final readonly class App
                 'defaults' => [
                     'provider' => $this->config->defaultProvider(),
                     'seed' => $this->config->defaultSeed(),
+                    'seed_type' => $this->config->defaultSeedType()->value,
+                    'seed_frequency' => $this->config->defaultSeedFrequency()->value,
                     'runs_per_benchmark' => $this->config->defaultRunsPerBenchmark(),
                 ],
+                'seed_types' => array_map(static fn(SeedType $type): array => ['id' => $type->value, 'name' => $type->label()], SeedType::cases()),
+                'seed_frequencies' => array_map(static fn(SeedFrequency $frequency): array => ['id' => $frequency->value, 'name' => $frequency->label()], SeedFrequency::cases()),
                 'providers' => $this->config->supportedProviders(),
                 'benchmarks' => $this->benchmarks->catalog(),
             ]);
@@ -76,7 +83,6 @@ final readonly class App
             $evaluationModel = (string) ($payload['evaluation_model'] ?? '');
             $benchmarks = array_values(array_filter((array) ($payload['benchmarks'] ?? []), static fn(mixed $value): bool => is_string($value) && $value !== ''));
             $runs = max(1, (int) ($payload['runs_per_benchmark'] ?? $this->config->defaultRunsPerBenchmark()));
-            $seed = array_key_exists('seed', $payload) && $payload['seed'] !== null && $payload['seed'] !== '' ? (int) $payload['seed'] : $this->config->defaultSeed();
 
             if ($models === []) {
                 $this->json(['error' => 'Select at least one model.'], 422);
@@ -96,13 +102,22 @@ final readonly class App
                 return;
             }
 
+            try {
+                $seedConfiguration = (new SessionSeedConfigurationValidator($this->config))
+                    ->resolve($payload, count($models), count($benchmarks), $runs);
+            } catch (\InvalidArgumentException $e) {
+                $this->json(['error' => $e->getMessage()], 422);
+
+                return;
+            }
+
             $session = $this->repository->createSession(
                 $provider,
                 $models,
                 $evaluationModel,
                 $benchmarks,
                 $runs,
-                $seed,
+                $seedConfiguration,
             );
 
             $this->json(['session' => $session], 201);
@@ -316,7 +331,7 @@ final readonly class App
 
         fputcsv($handle, [
             'session_id', 'provider', 'model_id', 'benchmark_id', 'run_number', 'status',
-            'capability_score', 'quality_score', 'total_score', 'started_at', 'finished_at',
+            'effective_seed', 'capability_score', 'quality_score', 'total_score', 'started_at', 'finished_at',
             'response_text', 'reasoning_text', 'deterministic_json', 'rubric_json', 'usage_json', 'metrics_json',
         ], ',', '"', '\\');
 
@@ -328,6 +343,7 @@ final readonly class App
                 $row['benchmark_id'],
                 $row['run_number'],
                 $row['status'],
+                $row['effective_seed'],
                 $row['capability_score'],
                 $row['quality_score'],
                 $row['total_score'],
@@ -447,7 +463,7 @@ final readonly class App
                                 <button type="button" class="session-item" :class="{ 'is-active': selectedSession && selectedSession.id === session.id }" @click="selectSession(session.id)">
                                     <span class="session-item-main">
                                         <strong x-text="timeAgo(session.name, sessionsRefreshedAt)"></strong>
-                                        <span class="session-meta" x-text="session.provider + ' • ' + session.status"></span>
+                                        <span class="session-meta" x-text="session.provider + ' • ' + formatStatusLabel(session.status) + ' • ' + seedPolicyLabel(session)"></span>
                                     </span>
                                     <span class="session-item-side">
                                         <span class="badge" x-text="session.completed_attempt_count + '/' + session.attempt_count"></span>
@@ -505,7 +521,7 @@ final readonly class App
                         <div class="card-header">
                             <div>
                                 <h3>New Session</h3>
-                                <p>Choose the provider, models, evaluator, benchmarks, run count, and seed.</p>
+                                <p>Choose the provider, models, evaluator, benchmarks, run count, and seed policy.</p>
                             </div>
                         </div>
 
@@ -526,7 +542,27 @@ final readonly class App
 
                             <label class="field">
                                 <span>Seed</span>
-                                <input class="input" type="number" x-model="form.seed" placeholder="Optional reproducibility seed">
+                                <input class="input" type="number" min="0" step="1" x-model="form.seed" :disabled="form.seed_type === 'random'" :placeholder="form.seed_type === 'random' ? 'Generated automatically' : 'Base or fixed seed'">
+                                <p class="field-help" x-text="seedInputHelp()"></p>
+                            </label>
+
+                            <label class="field">
+                                <span>Seed Type</span>
+                                <select class="select" x-model="form.seed_type" @change="normalizeSeedControls()">
+                                    <template x-for="seedType in seedTypes" :key="seedType.id">
+                                        <option :value="seedType.id" x-text="seedType.name"></option>
+                                    </template>
+                                </select>
+                            </label>
+
+                            <label class="field">
+                                <span>Seed Change Frequency</span>
+                                <select class="select" x-model="form.seed_frequency" :disabled="form.seed_type === 'fixed'" @change="normalizeSeedControls()">
+                                    <template x-for="frequency in seedFrequencies" :key="frequency.id">
+                                        <option :value="frequency.id" x-text="frequency.name"></option>
+                                    </template>
+                                </select>
+                                <p class="field-help" x-text="seedFrequencyHelp()"></p>
                             </label>
 
                             <div class="field field-block">
@@ -588,6 +624,7 @@ final readonly class App
                                 <button class="btn btn-secondary btn-sm" x-show="canPauseSelectedSession()" @click="controlSession('pause')">Pause</button>
                                 <button class="btn btn-secondary btn-sm" x-show="canResumeSelectedSession()" @click="controlSession('resume')">Resume</button>
                                 <button class="btn btn-secondary btn-sm" x-show="canStopSelectedSession()" @click="controlSession('stop')">Stop</button>
+                                <span class="badge" x-show="activeSeed !== null" x-text="'Seed ' + formatSeed(activeSeed)"></span>
                                 <span class="badge" x-text="currentStatus"></span>
                             </div>
                         </div>
@@ -667,7 +704,7 @@ final readonly class App
                                                 <strong x-text="attempt.model_id + ' • ' + attempt.benchmark_id"></strong>
                                                 <span class="badge badge-strong" x-text="formatScore(attempt.total_score)"></span>
                                             </div>
-                                            <p class="attempt-meta" x-text="'Run ' + attempt.run_number + ' • ' + formatStatusLabel(attempt.status) + ' • Cap: ' + formatScore(attempt.capability_score, 50) + ' • Qual: ' + formatScore(attempt.quality_score, 50)"></p>
+                                            <p class="attempt-meta" x-text="'Run ' + attempt.run_number + ' • Seed ' + formatSeed(attempt.effective_seed) + ' • ' + formatStatusLabel(attempt.status) + ' • Cap: ' + formatScore(attempt.capability_score, 50) + ' • Qual: ' + formatScore(attempt.quality_score, 50)"></p>
                                         </button>
                                     </template>
                                 </div>
@@ -1049,7 +1086,7 @@ HTML;
                                         <strong x-text="attempt.model_id + ' • ' + formatBenchmarkLabel(attempt.benchmark_id)"></strong>
                                         <span class="badge badge-strong" x-text="formatScore(attempt.total_score)"></span>
                                     </div>
-                                    <p class="attempt-meta" x-text="'Run ' + attempt.run_number + ' • ' + formatStatusLabel(attempt.status) + ' • Cap: ' + formatScore(attempt.capability_score, 50) + ' • Qual: ' + formatScore(attempt.quality_score, 50)"></p>
+                                    <p class="attempt-meta" x-text="'Run ' + attempt.run_number + ' • Seed ' + formatSeed(attempt.effective_seed) + ' • ' + formatStatusLabel(attempt.status) + ' • Cap: ' + formatScore(attempt.capability_score, 50) + ' • Qual: ' + formatScore(attempt.quality_score, 50)"></p>
                                 </button>
                             </template>
                         </div>

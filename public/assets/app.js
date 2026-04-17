@@ -5,6 +5,8 @@ window.benchyApp = function benchyApp() {
         sessionsRefreshedAt: Date.now(),
         providers: [],
         benchmarks: [],
+        seedTypes: [],
+        seedFrequencies: [],
         availableModels: [],
         sessions: [],
         leaderboard: [],
@@ -20,6 +22,7 @@ window.benchyApp = function benchyApp() {
         liveEvents: [],
         liveOutput: '',
         liveReasoning: '',
+        activeSeed: null,
         maxLiveEvents: 250,
         form: {
             provider: 'ollama',
@@ -27,6 +30,8 @@ window.benchyApp = function benchyApp() {
             evaluation_model: '',
             benchmarks: [],
             runs_per_benchmark: 1,
+            seed_type: 'fixed',
+            seed_frequency: 'per_session',
             seed: '',
         },
 
@@ -45,11 +50,22 @@ window.benchyApp = function benchyApp() {
             const data = await response.json();
             this.providers = data.providers || [];
             this.benchmarks = data.benchmarks || [];
+            this.seedTypes = data.seed_types || [];
+            this.seedFrequencies = data.seed_frequencies || [];
             this.form.provider = data.defaults?.provider || 'ollama';
             this.form.runs_per_benchmark = data.defaults?.runs_per_benchmark || 1;
+            this.form.seed_type = data.defaults?.seed_type || 'fixed';
+            this.form.seed_frequency = data.defaults?.seed_frequency || 'per_session';
             this.form.seed = data.defaults?.seed ?? '';
             this.form.benchmarks = this.benchmarks.slice(0, 4).map((benchmark) => benchmark.id);
+            this.normalizeSeedControls();
             await this.loadModels();
+        },
+
+        normalizeSeedControls() {
+            if (this.form.seed_type === 'fixed') {
+                this.form.seed_frequency = 'per_session';
+            }
         },
 
         async loadModels() {
@@ -149,6 +165,7 @@ window.benchyApp = function benchyApp() {
                 this.liveEvents = [];
                 this.liveOutput = '';
                 this.liveReasoning = '';
+                this.activeSeed = null;
                 this.running = true;
                 this.currentStatus = 'running';
                 this.sidebarOpen = false;
@@ -181,11 +198,15 @@ window.benchyApp = function benchyApp() {
                 const attempts = Array.isArray(this.selectedSession?.attempts) ? this.selectedSession.attempts : [];
                 const currentAttempt = attempts.find((attempt) => attempt.id === this.selectedAttempt.id);
                 this.selectedAttempt = currentAttempt || null;
+                if (this.selectedAttempt) {
+                    this.activeSeed = this.selectedAttempt.effective_seed ?? this.activeSeed;
+                }
             }
         },
 
         selectAttempt(attempt) {
             this.selectedAttempt = attempt;
+            this.activeSeed = attempt?.effective_seed ?? this.activeSeed;
             this.selectedAttemptEvents = [];
             this.traceExpanded = false;
             void this.loadAttemptEvents(attempt.id);
@@ -226,7 +247,8 @@ window.benchyApp = function benchyApp() {
             if (eventType === 'attempt_start') {
                 this.liveOutput = '';
                 this.liveReasoning = '';
-                this.currentStatus = payload.model_id + ' • ' + payload.benchmark_id + ' • run ' + payload.run_number;
+                this.activeSeed = payload.seed ?? null;
+                this.currentStatus = this.formatRunStatus(payload);
                 await this.refreshSelectedSession(envelope.session_id, envelope.attempt_id, true);
             }
 
@@ -313,6 +335,7 @@ window.benchyApp = function benchyApp() {
                     const activeAttempt = this.selectedSession.attempts.find((attempt) => attempt.id === attemptId);
                     if (activeAttempt) {
                         this.selectedAttempt = activeAttempt;
+                        this.activeSeed = activeAttempt.effective_seed ?? this.activeSeed;
                     }
                 }
 
@@ -320,6 +343,7 @@ window.benchyApp = function benchyApp() {
                     const updatedAttempt = this.selectedSession.attempts.find((attempt) => attempt.id === this.selectedAttempt.id);
                     if (updatedAttempt) {
                         this.selectedAttempt = updatedAttempt;
+                        this.activeSeed = updatedAttempt.effective_seed ?? this.activeSeed;
                     }
                 }
             } finally {
@@ -339,7 +363,7 @@ window.benchyApp = function benchyApp() {
         summarizeEvent(eventType, payload) {
             switch (eventType) {
                 case 'attempt_start':
-                    return `${payload.model_id} • ${payload.benchmark_id} • run ${payload.run_number}`;
+                    return this.formatRunStatus(payload);
                 case 'tool_call':
                     return `${payload.name}(${JSON.stringify(payload.arguments)})`;
                 case 'tool_result':
@@ -373,10 +397,61 @@ window.benchyApp = function benchyApp() {
             window.localStorage.setItem('benchy.hideBrandCopy', '1');
         },
 
+        formatRunStatus(payload) {
+            return `${payload.model_id} • ${payload.benchmark_id} • run ${payload.run_number} • seed ${this.formatSeed(payload.seed)}`;
+        },
+
         formatBenchmarkLabel(value) {
             return String(value || '')
                 .replace(/_/g, ' ')
                 .trim();
+        },
+
+        formatSeed(value) {
+            return value === null || value === undefined || value === '' ? 'auto' : String(value);
+        },
+
+        seedPolicyLabel(session) {
+            if (!session) {
+                return '';
+            }
+
+            const type = String(session.seed_type || session.config?.seed_type || 'fixed').replace(/_/g, ' ');
+            const frequency = String(session.seed_frequency || session.config?.seed_frequency || 'per_session').replace(/_/g, ' ');
+
+            if (type === 'fixed') {
+                return 'fixed • seed ' + this.formatSeed(session.seed);
+            }
+
+            return type + ' • ' + frequency + ' • base ' + this.formatSeed(session.seed);
+        },
+
+        seedInputHelp() {
+            if (this.form.seed_type === 'random') {
+                return 'A random base seed will be generated when the session starts.';
+            }
+
+            if (this.form.seed_type === 'iterative') {
+                return 'Enter the starting seed. Benchy will increment it at the selected frequency.';
+            }
+
+            return 'Enter a non-negative seed to make the session reproducible.';
+        },
+
+        seedFrequencyHelp() {
+            if (this.form.seed_type === 'fixed') {
+                return 'Fixed mode always uses one seed for the entire session.';
+            }
+
+            if (this.form.seed_frequency === 'per_run') {
+                return 'The effective seed changes for every individual run.';
+            }
+
+            if (this.form.seed_frequency === 'per_test') {
+                return 'The effective seed changes once for each model and benchmark pair.';
+            }
+
+            return 'The same effective seed is reused for the full session.';
         },
 
         formatStatusLabel(value) {

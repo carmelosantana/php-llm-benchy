@@ -67,8 +67,8 @@ final class SyntheticMarioSimulator
         $this->actions++;
 
         foreach ($steps as $step) {
-            $button = strtoupper((string) ($step['button'] ?? ''));
-            $frames = (int) ($step['frames'] ?? 0);
+            $button = strtoupper($step['button']);
+            $frames = $step['frames'];
 
             if (!$this->isValidButton($button) || $frames < 1 || $frames > 240) {
                 $this->invalidActions++;
