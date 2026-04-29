@@ -110,7 +110,7 @@ ORDER BY s.created_at DESC
 SQL;
 
         if ($limit !== null) {
-            $sql .= '\nLIMIT :limit';
+            $sql .= "\nLIMIT :limit";
         }
 
         $stmt = $this->pdo->prepare($sql);

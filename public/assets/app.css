@@ -66,17 +66,27 @@ pre,
 }
 
 .benchy-sidebar {
+    display: flex;
+    flex-direction: column;
     min-width: 0;
     border-right: 1px solid var(--border);
     background: var(--surface-muted);
+    overflow: hidden;
+}
+
+.benchy-sidebar nav {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 .sidebar-section {
-    min-height: 100vh;
-    padding: 1rem;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 0.85rem;
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: 0.75rem;
     overflow-y: auto;
     box-sizing: border-box;
 }
@@ -163,7 +173,7 @@ pre,
 
 .sidebar-attribution {
     margin-top: auto;
-    padding-top: 0.5rem;
+    padding-top: 0.35rem;
     color: var(--muted-foreground);
     font-size: 0.84rem;
     text-align: center;
@@ -225,7 +235,22 @@ pre,
 }
 
 .session-list-card {
-    padding: 0.8rem;
+    padding: 0.65rem;
+}
+
+.session-list-card .card-header {
+    margin-bottom: 0.55rem;
+    gap: 0.75rem;
+}
+
+.session-list-card .card-header h2 {
+    font-size: 0.96rem;
+    line-height: 1.15;
+}
+
+.session-list-card .card-header p {
+    font-size: 0.8rem;
+    line-height: 1.3;
 }
 
 .card-header {
@@ -321,7 +346,7 @@ pre,
 }
 
 .session-list {
-    gap: 0.5rem;
+    gap: 0.4rem;
 }
 
 .model-rail-list {
@@ -513,11 +538,95 @@ pre,
     outline-offset: 2px;
 }
 
+.leader-card {
+    box-sizing: border-box;
+    min-height: 100%;
+    min-width: 0;
+    max-width: 100%;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.85rem;
+    overflow: hidden;
+}
+
+.leader-top {
+    align-items: flex-start;
+}
+
+.leader-score {
+    margin-left: auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.15rem;
+    text-align: right;
+}
+
+.leader-score-label {
+    color: var(--muted-foreground);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+
+.leader-score-value {
+    font-size: clamp(1.35rem, 1.7vw, 1.8rem);
+    line-height: 1;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+}
+
+.leader-model {
+    color: var(--foreground);
+    font-size: 1.02rem;
+    line-height: 1.3;
+}
+
+.leader-sub {
+    padding-top: 0.65rem;
+    border-top: 1px solid var(--border);
+}
+
+.model-score-card {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    padding: 1rem 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    overflow: hidden;
+}
+
+.model-score-card .compact-row {
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.model-score-card .compact-row strong {
+    font-size: 1.05rem;
+    line-height: 1.25;
+}
+
+.model-score-card .badge {
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.model-score-card .progress {
+    margin-top: 0;
+}
+
+.model-score-sub {
+    font-size: 0.9rem;
+}
+
 .session-item,
 .attempt-card,
 .session-link-card,
-.leader-card,
-.model-score-card,
 .summary-card,
 .stat-card,
 .trace-item {
@@ -528,7 +637,7 @@ pre,
 .session-item,
 .attempt-card {
     width: 100%;
-    padding: 0.75rem;
+    padding: 0.6rem 0.65rem;
     appearance: none;
     color: var(--foreground);
     cursor: pointer;
@@ -536,9 +645,9 @@ pre,
 
 .session-item {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
+    gap: 0.6rem;
 }
 
 .session-item-main,
@@ -546,9 +655,29 @@ pre,
     min-width: 0;
 }
 
+.session-item-main {
+    gap: 0.12rem;
+}
+
 .session-item-side {
     align-items: flex-end;
     flex-shrink: 0;
+}
+
+.session-item-main strong {
+    font-size: 0.9rem;
+    line-height: 1.15;
+}
+
+.session-meta {
+    font-size: 0.74rem;
+    line-height: 1.3;
+}
+
+.session-item .badge {
+    min-height: 1.45rem;
+    padding: 0.1rem 0.48rem;
+    font-size: 0.74rem;
 }
 
 .session-item-main strong,
@@ -801,8 +930,6 @@ pre,
 }
 
 @supports (content-visibility: auto) {
-    .leader-card,
-    .model-score-card,
     .attempt-card,
     .session-item,
     .trace-item,
@@ -827,8 +954,6 @@ pre,
     }
 }
 
-.leader-card,
-.model-score-card,
 .attempt-card,
 .session-item,
 .trace-item,
@@ -869,6 +994,7 @@ pre,
         inset: 0 auto 0 0;
         z-index: 40;
         width: min(86vw, 320px);
+        height: 100vh;
         transform: translate3d(-100%, 0, 0);
         transition: transform 180ms ease;
         will-change: transform;

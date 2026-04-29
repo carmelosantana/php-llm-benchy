@@ -461,7 +461,10 @@ final readonly class App
                         <article class="leader-card">
                             <div class="leader-top">
                                 <span class="badge" x-text="entry.provider"></span>
-                                <strong x-text="entry.average_score + '/100'"></strong>
+                                <div class="leader-score">
+                                    <span class="leader-score-label">Avg score</span>
+                                    <strong class="leader-score-value" x-text="formatAverageScore(entry.average_score)"></strong>
+                                </div>
                             </div>
                             <p class="leader-model" x-text="entry.model_id"></p>
                             <p class="leader-sub" x-text="entry.session_count + ' session(s)'"></p>

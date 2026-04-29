@@ -42,16 +42,19 @@ window.benchyApp = function benchyApp() {
         async init() {
             this.showBrandCopy = window.localStorage.getItem('benchy.hideBrandCopy') !== '1';
 
-            await Promise.all([
-                this.loadConfig(),
-                this.refreshSessions(),
-                this.refreshLeaderboard(),
-            ]);
+            try {
+                await Promise.all([
+                    this.loadConfig(),
+                    this.refreshSessions(),
+                    this.refreshLeaderboard(),
+                ]);
+            } catch (error) {
+                this.reportRequestError(error, 'Failed to load Benchy.');
+            }
         },
 
         async loadConfig() {
-            const response = await fetch('/api/config');
-            const data = await response.json();
+            const data = await this.fetchJson('/api/config');
             this.providers = data.providers || [];
             this.benchmarks = data.benchmarks || [];
             this.seedTypes = data.seed_types || [];
@@ -73,8 +76,7 @@ window.benchyApp = function benchyApp() {
         },
 
         async loadModels() {
-            const response = await fetch('/api/models?provider=' + encodeURIComponent(this.form.provider));
-            const data = await response.json();
+            const data = await this.fetchJson('/api/models?provider=' + encodeURIComponent(this.form.provider));
             this.availableModels = data.models || [];
 
             const modelIds = this.availableModels.map((model) => model.id);
@@ -86,8 +88,7 @@ window.benchyApp = function benchyApp() {
         },
 
         async refreshSessions() {
-            const response = await fetch('/api/sessions?limit=' + encodeURIComponent(this.sessionDisplayLimit));
-            const data = await response.json();
+            const data = await this.fetchJson('/api/sessions?limit=' + encodeURIComponent(this.sessionDisplayLimit));
             this.sessions = data.sessions || [];
             this.sessionTotal = Number(data.total || this.sessions.length);
             this.sessionsRefreshedAt = Date.now();
@@ -102,15 +103,9 @@ window.benchyApp = function benchyApp() {
                 return;
             }
 
-            const response = await fetch('/api/sessions/' + encodeURIComponent(this.selectedSession.id) + '/' + action, {
+            const data = await this.fetchJson('/api/sessions/' + encodeURIComponent(this.selectedSession.id) + '/' + action, {
                 method: 'POST',
             });
-            const data = await response.json();
-
-            if (!response.ok) {
-                window.alert(data.error || 'Failed to update session state.');
-                return;
-            }
 
             this.selectedSession = data.session;
 
@@ -143,25 +138,25 @@ window.benchyApp = function benchyApp() {
         },
 
         async refreshLeaderboard() {
-            const response = await fetch('/api/leaderboard');
-            const data = await response.json();
+            const data = await this.fetchJson('/api/leaderboard');
             this.leaderboard = data.leaderboard || [];
         },
 
         async createAndRunSession() {
+            const validationMessage = this.validateSessionForm();
+            if (validationMessage) {
+                window.alert(validationMessage);
+                return;
+            }
+
             this.creatingSession = true;
 
             try {
-                const response = await fetch('/api/sessions', {
+                const data = await this.fetchJson('/api/sessions', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(this.form),
                 });
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.error || 'Failed to create session.');
-                }
 
                 this.selectedSession = data.session;
                 this.selectedAttempt = null;
@@ -179,8 +174,7 @@ window.benchyApp = function benchyApp() {
                 await this.refreshSessions();
                 this.startStream(this.selectedSession.id);
             } catch (error) {
-                const message = error instanceof Error ? error.message : 'Failed to create the session.';
-                window.alert(message);
+                this.reportRequestError(error, 'Failed to create the session.');
             } finally {
                 this.creatingSession = false;
             }
@@ -193,12 +187,7 @@ window.benchyApp = function benchyApp() {
 
         async refreshSession(sessionId) {
             const previousSessionId = this.selectedSession?.id || null;
-            const response = await fetch('/api/sessions/' + encodeURIComponent(sessionId));
-            const data = await response.json();
-            if (!response.ok) {
-                window.alert(data.error || 'Failed to load session.');
-                return;
-            }
+            const data = await this.fetchJson('/api/sessions/' + encodeURIComponent(sessionId));
 
             this.selectedSession = data.session;
             if (previousSessionId !== sessionId) {
@@ -227,9 +216,83 @@ window.benchyApp = function benchyApp() {
                 return;
             }
 
-            const response = await fetch('/api/sessions/' + encodeURIComponent(this.selectedSession.id) + '/events?attempt_id=' + encodeURIComponent(attemptId) + '&limit=250');
-            const data = await response.json();
+            const data = await this.fetchJson('/api/sessions/' + encodeURIComponent(this.selectedSession.id) + '/events?attempt_id=' + encodeURIComponent(attemptId) + '&limit=250');
             this.selectedAttemptEvents = data.events || [];
+        },
+
+        async fetchJson(url, options = {}) {
+            const response = await fetch(url, options);
+            const text = await response.text();
+            const data = this.parseJsonText(text, response.url || url);
+
+            if (!response.ok) {
+                const message = typeof data?.error === 'string' && data.error !== ''
+                    ? data.error
+                    : ('Request failed with status ' + response.status + '.');
+                const error = new Error(message);
+                error.response = response;
+                error.data = data;
+                throw error;
+            }
+
+            return data;
+        },
+
+        parseJsonText(text, url) {
+            const normalized = String(text ?? '')
+                .replace(/^\uFEFF/, '')
+                .trim();
+
+            if (normalized === '') {
+                return {};
+            }
+
+            try {
+                return JSON.parse(normalized);
+            } catch (_error) {
+                const objectStart = normalized.indexOf('{');
+                const arrayStart = normalized.indexOf('[');
+                const candidates = [objectStart, arrayStart].filter((index) => index >= 0);
+                const firstJsonIndex = candidates.length > 0 ? Math.min(...candidates) : -1;
+
+                if (firstJsonIndex > 0) {
+                    try {
+                        return JSON.parse(normalized.slice(firstJsonIndex));
+                    } catch (_nestedError) {
+                        // Fall through to the formatted error below.
+                    }
+                }
+
+                throw new Error('Invalid JSON response from ' + url + ': ' + normalized.slice(0, 180));
+            }
+        },
+
+        validateSessionForm() {
+            if (!Array.isArray(this.form.models) || this.form.models.length === 0) {
+                return 'Select at least one model.';
+            }
+
+            if (!this.form.evaluation_model) {
+                return 'Select an evaluation model.';
+            }
+
+            if (!Array.isArray(this.form.benchmarks) || this.form.benchmarks.length === 0) {
+                return 'Select at least one benchmark.';
+            }
+
+            return '';
+        },
+
+        reportRequestError(error, fallbackMessage) {
+            const message = error instanceof Error && error.message
+                ? error.message
+                : fallbackMessage;
+
+            console.error(error);
+
+            if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+                window.alert(message);
+            }
         },
 
         startStream(sessionId) {
@@ -239,13 +302,13 @@ window.benchyApp = function benchyApp() {
 
             this.eventSource = new EventSource('/api/run?session_id=' + encodeURIComponent(sessionId));
             this.eventSource.onmessage = (event) => {
-                const payload = JSON.parse(event.data);
+                const payload = this.parseJsonText(event.data, 'event:message');
                 this.handleStreamEvent(payload.event_type || 'message', payload);
             };
 
             ['attempt_start', 'iteration', 'text_delta', 'reasoning_delta', 'tool_call', 'tool_result', 'attempt_captured', 'attempt_scored', 'attempt_failed', 'evaluation_start', 'session_complete', 'session_failed', 'session_paused', 'session_resumed', 'session_stopped', 'fatal', 'model_start', 'end'].forEach((eventName) => {
                 this.eventSource.addEventListener(eventName, (event) => {
-                    const payload = JSON.parse(event.data);
+                    const payload = this.parseJsonText(event.data, 'event:' + eventName);
                     void this.handleStreamEvent(eventName, payload);
                 });
             });
@@ -476,6 +539,15 @@ window.benchyApp = function benchyApp() {
         formatScore(value, max = 100) {
             const numeric = Number(value || 0);
             return Math.round(numeric) + '/' + max;
+        },
+
+        formatAverageScore(value) {
+            const numeric = Number(value || 0);
+            if (!Number.isFinite(numeric)) {
+                return '0/100';
+            }
+
+            return numeric.toFixed(1).replace(/\.0$/, '') + '/100';
         },
 
         formatJson(value) {
