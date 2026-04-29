@@ -85,9 +85,9 @@ final class SessionRepository
         return $this->getSession($sessionId) ?? [];
     }
 
-    public function listSessions(): array
+    public function listSessions(?int $limit = null): array
     {
-        $stmt = $this->pdo->query(<<<'SQL'
+        $sql = <<<'SQL'
 SELECT
     s.id,
     s.name,
@@ -107,16 +107,35 @@ SELECT
     (SELECT COUNT(*) FROM attempts a WHERE a.session_id = s.id AND a.status = 'completed') AS completed_attempt_count
 FROM sessions s
 ORDER BY s.created_at DESC
-SQL);
+SQL;
+
+        if ($limit !== null) {
+            $sql .= '\nLIMIT :limit';
+        }
+
+        $stmt = $this->pdo->prepare($sql);
 
         if ($stmt === false) {
             throw new \RuntimeException('Failed to fetch sessions.');
         }
 
+        if ($limit !== null) {
+            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        }
+
+        $stmt->execute();
+
         return $stmt->fetchAll();
     }
 
-    public function getSession(string $sessionId): ?array
+    public function countSessions(): int
+    {
+        $count = $this->pdo->query('SELECT COUNT(*) FROM sessions')->fetchColumn();
+
+        return (int) $count;
+    }
+
+    public function getSession(string $sessionId, ?int $attemptLimit = null): ?array
     {
         $stmt = $this->pdo->prepare('SELECT * FROM sessions WHERE id = :id');
         $stmt->execute([':id' => $sessionId]);
@@ -131,7 +150,8 @@ SQL);
 
         $session['models'] = $this->listSessionModels($sessionId);
         $session['benchmarks'] = $this->listSessionBenchmarks($sessionId);
-        $session['attempts'] = $this->listAttempts($sessionId);
+    $session['attempt_total'] = $this->countAttempts($sessionId);
+    $session['attempts'] = $this->listAttempts($sessionId, $attemptLimit);
         $session['benchmark_scores'] = $this->listBenchmarkScores($sessionId);
         $session['model_scores'] = $this->listModelScores($sessionId);
 
@@ -343,10 +363,20 @@ SQL);
         ]);
     }
 
-    public function listAttempts(string $sessionId): array
+    public function listAttempts(string $sessionId, ?int $limit = null): array
     {
-        $stmt = $this->pdo->prepare('SELECT * FROM attempts WHERE session_id = :session_id ORDER BY model_id ASC, benchmark_id ASC, run_number ASC');
-        $stmt->execute([':session_id' => $sessionId]);
+        $sql = 'SELECT * FROM attempts WHERE session_id = :session_id ORDER BY model_id ASC, benchmark_id ASC, run_number ASC';
+
+        if ($limit !== null) {
+            $sql .= ' LIMIT :limit';
+        }
+
+        $stmt = $this->pdo->prepare($sql);
+        $stmt->bindValue(':session_id', $sessionId);
+        if ($limit !== null) {
+            $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        }
+        $stmt->execute();
         $attempts = $stmt->fetchAll();
 
         return array_map(function (array $attempt): array {
@@ -358,6 +388,14 @@ SQL);
 
             return $attempt;
         }, $attempts);
+    }
+
+    private function countAttempts(string $sessionId): int
+    {
+        $stmt = $this->pdo->prepare('SELECT COUNT(*) FROM attempts WHERE session_id = :session_id');
+        $stmt->execute([':session_id' => $sessionId]);
+
+        return (int) $stmt->fetchColumn();
     }
 
     public function listBenchmarkScores(string $sessionId): array

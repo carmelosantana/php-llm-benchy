@@ -71,7 +71,12 @@ final readonly class App
         }
 
         if ($method === 'GET' && $path === '/api/sessions') {
-            $this->json(['sessions' => $this->repository->listSessions()]);
+            $limit = isset($_GET['limit']) ? max(1, min(200, (int) $_GET['limit'])) : null;
+
+            $this->json([
+                'sessions' => $this->repository->listSessions($limit),
+                'total' => $this->repository->countSessions(),
+            ]);
 
             return;
         }
@@ -126,7 +131,8 @@ final readonly class App
         }
 
         if ($method === 'GET' && preg_match('#^/api/sessions/([^/]+)$#', $path, $matches) === 1) {
-            $session = $this->repository->getSession($matches[1]);
+            $attemptLimit = isset($_GET['attempt_limit']) ? max(1, min(500, (int) $_GET['attempt_limit'])) : null;
+            $session = $this->repository->getSession($matches[1], $attemptLimit);
             if ($session === null) {
                 $this->json(['error' => 'Session not found.'], 404);
 
@@ -377,66 +383,11 @@ final readonly class App
     private function renderIndex(): string
     {
         $title = htmlspecialchars($this->config->appName(), ENT_QUOTES, 'UTF-8');
-        $cssHref = $this->assetHref('/assets/app.css');
-        $jsHref = $this->assetHref('/assets/app.js');
-
-        return <<<HTML
-<!DOCTYPE html>
-<html lang="en" class="dark">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script>
-        document.documentElement.classList.add('fonts-loading');
-        window.addEventListener('DOMContentLoaded', function () {
-            const fontReady = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
-            Promise.race([
-                fontReady,
-                new Promise((resolve) => window.setTimeout(resolve, 1200)),
-            ]).then(function () {
-                document.documentElement.classList.remove('fonts-loading');
-                document.documentElement.classList.add('fonts-ready');
-            });
-        });
-    </script>
-    <title>{$title}</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=Geist+Mono:wght@100..900&display=swap">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/basecoat-css@0.3.11/dist/basecoat.cdn.min.css">
-    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
-    <link rel="stylesheet" href="{$cssHref}">
-    <script defer src="{$jsHref}"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-</head>
-<body x-data="benchyApp()" x-init="init()" class="benchy-body">
-    <div class="benchy-background" aria-hidden="true">
-        <div class="benchy-grid-glow"></div>
-        <svg class="benchy-hex-pattern" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-                <pattern id="hex-bg" width="105" height="60.622" patternUnits="userSpaceOnUse" x="-1" y="-1">
-                    <polygon class="hex-tile" points="61.25,30.311 43.75,60.622 8.75,60.622 -8.75,30.311 8.75,0 43.75,0"/>
-                    <polygon class="hex-tile" points="113.75,60.622 96.25,90.933 61.25,90.933 43.75,60.622 61.25,30.311 96.25,30.311"/>
-                </pattern>
-            </defs>
-            <rect width="100%" height="100%" style="fill:url(#hex-bg);stroke:none"/>
-            <svg aria-hidden="true" style="overflow:visible" x="-1" y="-1">
-                <polygon class="hex-highlight" points="112.75,121.244 95.75,150.689 61.75,150.689 44.75,121.244 61.75,91.799 95.75,91.799"/>
-                <polygon class="hex-highlight" points="165.25,151.555 148.25,181.000 114.25,181.000 97.25,151.555 114.25,122.110 148.25,122.110"/>
-                <polygon class="hex-highlight" points="217.75,303.110 200.75,332.555 166.75,332.555 149.75,303.110 166.75,273.665 200.75,273.665"/>
-                <polygon class="hex-highlight" points="270.25,272.799 253.25,302.244 219.25,302.244 202.25,272.799 219.25,243.354 253.25,243.354"/>
-                <polygon class="hex-highlight" points="322.75,303.110 305.75,332.555 271.75,332.555 254.75,303.110 271.75,273.665 305.75,273.665"/>
-                <polygon class="hex-highlight" points="375.25,212.177 358.25,241.622 324.25,241.622 307.25,212.177 324.25,182.732 358.25,182.732"/>
-                <polygon class="hex-highlight" points="480.25,151.555 463.25,181.000 429.25,181.000 412.25,151.555 429.25,122.110 463.25,122.110"/>
-                <polygon class="hex-highlight" points="480.25,333.421 463.25,362.866 429.25,362.866 412.25,333.421 429.25,304.976 463.25,304.976"/>
-                <polygon class="hex-highlight" points="585.25,636.531 568.25,666.976 534.25,666.976 517.25,636.531 534.25,607.086 568.25,607.086"/>
-            </svg>
-        </svg>
-    </div>
-    <div class="benchy-shell">
+        $content = <<<HTML
+    <div class="benchy-shell" x-data="benchyApp()" x-init="init()">
         <aside class="benchy-sidebar" :class="{ 'is-open': sidebarOpen }">
             <nav aria-label="Session navigation">
-                <section class="scrollbar sidebar-section">
+                <section class="sidebar-section">
                     <div class="sidebar-topbar">
                         <div class="brand-block">
                             <h1>PHP LLM Benchy</h1>
@@ -459,7 +410,7 @@ final readonly class App
                         </div>
 
                         <div class="session-list" x-show="sessions.length > 0">
-                            <template x-for="session in sessions" :key="session.id">
+                            <template x-for="session in visibleSessions()" :key="session.id">
                                 <button type="button" class="session-item" :class="{ 'is-active': selectedSession && selectedSession.id === session.id }" @click="selectSession(session.id)">
                                     <span class="session-item-main">
                                         <strong x-text="timeAgo(session.name, sessionsRefreshedAt)"></strong>
@@ -470,6 +421,10 @@ final readonly class App
                                     </span>
                                 </button>
                             </template>
+
+                            <div class="list-actions" x-show="hasMoreSessions()">
+                                <button type="button" class="btn btn-secondary btn-sm" @click="showMoreSessions()">Show more sessions</button>
+                            </div>
                         </div>
 
                         <div class="empty" x-show="sessions.length === 0">
@@ -681,7 +636,7 @@ final readonly class App
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            <template x-for="row in (selectedSession?.benchmark_scores || [])" :key="row.model_id + '-' + row.benchmark_id">
+                                            <template x-for="row in visibleSelectedBenchmarkScores()" :key="row.model_id + '-' + row.benchmark_id">
                                                 <tr>
                                                     <td x-text="row.model_id"></td>
                                                     <td x-text="row.benchmark_id"></td>
@@ -693,12 +648,15 @@ final readonly class App
                                         </tbody>
                                     </table>
                                 </div>
+                                <div class="list-actions" x-show="hasMoreSelectedBenchmarkScores()">
+                                    <button type="button" class="btn btn-secondary btn-sm" @click="showMoreSelectedBenchmarkScores()">Show more rows</button>
+                                </div>
                             </section>
 
                             <section>
                                 <h4>Attempts</h4>
                                 <div class="attempt-list">
-                                    <template x-for="attempt in (selectedSession?.attempts || [])" :key="attempt.id">
+                                    <template x-for="attempt in visibleSelectedAttempts()" :key="attempt.id">
                                         <button type="button" class="attempt-card" :class="{ 'is-active': selectedAttempt && selectedAttempt.id === attempt.id }" @click="selectAttempt(attempt)">
                                             <div class="attempt-top">
                                                 <strong x-text="attempt.model_id + ' • ' + attempt.benchmark_id"></strong>
@@ -707,6 +665,9 @@ final readonly class App
                                             <p class="attempt-meta" x-text="'Run ' + attempt.run_number + ' • Seed ' + formatSeed(attempt.effective_seed) + ' • ' + formatStatusLabel(attempt.status) + ' • Cap: ' + formatScore(attempt.capability_score, 50) + ' • Qual: ' + formatScore(attempt.quality_score, 50)"></p>
                                         </button>
                                     </template>
+                                </div>
+                                <div class="list-actions" x-show="hasMoreSelectedAttempts()">
+                                    <button type="button" class="btn btn-secondary btn-sm" @click="showMoreSelectedAttempts()">Show more attempts</button>
                                 </div>
                             </section>
                         </div>
@@ -806,9 +767,9 @@ final readonly class App
             </footer>
         </main>
     </div>
-</body>
-</html>
 HTML;
+
+        return $this->renderDocument($title, $content, ['/assets/app.js']);
     }
 
     private function renderDashboardPage(): string
@@ -817,7 +778,6 @@ HTML;
         $dashboardJsHref = $this->assetHref('/assets/dashboard.js');
 
         $content = <<<HTML
-    {$this->backgroundMarkup()}
     <div class="page-shell" x-data="dashboardPage()" x-init="init()" x-cloak>
         <main class="benchy-main dashboard-main">
             <header class="card page-nav-card">
@@ -925,7 +885,7 @@ HTML;
                             </tr>
                         </thead>
                         <tbody>
-                            <template x-for="row in (marioAnalytics.models || [])" :key="row.model_id">
+                            <template x-for="row in visibleMarioRows()" :key="row.model_id">
                                 <tr>
                                     <td x-text="row.model_id"></td>
                                     <td x-text="row.completion_rate + '%' "></td>
@@ -938,6 +898,9 @@ HTML;
                         </tbody>
                     </table>
                 </div>
+                <div class="list-actions" x-show="hasMoreMarioRows()">
+                    <button type="button" class="btn btn-secondary btn-sm" @click="showMoreMarioRows()">Show more models</button>
+                </div>
             </section>
 
             <section class="card">
@@ -948,7 +911,7 @@ HTML;
                     </div>
                 </div>
                 <div class="dashboard-session-grid">
-                    <template x-for="session in recentSessions" :key="session.id">
+                    <template x-for="session in visibleRecentSessions()" :key="session.id">
                         <a class="session-link-card" :href="'/sessions/' + session.id">
                             <div class="compact-row">
                                 <strong x-text="session.name"></strong>
@@ -958,6 +921,9 @@ HTML;
                             <p class="session-meta" x-text="session.top_model_id ? ('Top: ' + session.top_model_id + ' • ' + session.average_score + '/100') : 'No scored models yet'"></p>
                         </a>
                     </template>
+                </div>
+                <div class="list-actions" x-show="hasMoreRecentSessions()">
+                    <button type="button" class="btn btn-secondary btn-sm" @click="showMoreRecentSessions()">Show more sessions</button>
                 </div>
             </section>
         </main>
@@ -978,7 +944,6 @@ HTML;
         $sessionIdJson = json_encode($sessionId, JSON_THROW_ON_ERROR | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
 
         $content = <<<HTML
-    {$this->backgroundMarkup()}
     <div class="page-shell" x-data='sessionDetailPage({$sessionIdJson})' x-init="init()" x-cloak>
         <main class="benchy-main detail-main">
             <header class="card page-nav-card">
@@ -1001,7 +966,7 @@ HTML;
                         <h3 x-text="session?.name || ''"></h3>
                         <p x-text="session ? (session.provider + ' • ' + session.status + ' • ' + (session.models?.length || 0) + ' model(s)') : ''"></p>
                     </div>
-                    <span class="badge badge-strong" x-text="session ? ((session.attempts || []).length + ' attempt(s)') : ''"></span>
+                    <span class="badge badge-strong" x-text="session ? (((session.attempt_total ?? (session.attempts || []).length)) + ' attempt(s)') : ''"></span>
                 </div>
                 <div class="stats-grid session-overview-grid">
                     <template x-for="card in sessionOverviewCards()" :key="card.label">
@@ -1058,7 +1023,7 @@ HTML;
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <template x-for="row in (session?.benchmark_scores || [])" :key="row.model_id + '-' + row.benchmark_id">
+                                    <template x-for="row in visibleBenchmarkScores()" :key="row.model_id + '-' + row.benchmark_id">
                                         <tr>
                                             <td x-text="row.model_id"></td>
                                             <td x-text="formatBenchmarkLabel(row.benchmark_id)"></td>
@@ -1070,6 +1035,9 @@ HTML;
                                 </tbody>
                             </table>
                         </div>
+                        <div class="list-actions" x-show="hasMoreBenchmarkScores()">
+                            <button type="button" class="btn btn-secondary btn-sm" @click="showMoreBenchmarkScores()">Show more rows</button>
+                        </div>
                     </article>
 
                     <article class="card">
@@ -1080,7 +1048,7 @@ HTML;
                             </div>
                         </div>
                         <div class="attempt-list">
-                            <template x-for="attempt in (session?.attempts || [])" :key="attempt.id">
+                            <template x-for="attempt in visibleAttempts()" :key="attempt.id">
                                 <button type="button" class="attempt-card" :class="{ 'is-active': selectedAttempt && selectedAttempt.id === attempt.id }" @click="selectAttempt(attempt)">
                                     <div class="attempt-top">
                                         <strong x-text="attempt.model_id + ' • ' + formatBenchmarkLabel(attempt.benchmark_id)"></strong>
@@ -1089,6 +1057,9 @@ HTML;
                                     <p class="attempt-meta" x-text="'Run ' + attempt.run_number + ' • Seed ' + formatSeed(attempt.effective_seed) + ' • ' + formatStatusLabel(attempt.status) + ' • Cap: ' + formatScore(attempt.capability_score, 50) + ' • Qual: ' + formatScore(attempt.quality_score, 50)"></p>
                                 </button>
                             </template>
+                        </div>
+                        <div class="list-actions" x-show="hasMoreAttempts()">
+                            <button type="button" class="btn btn-secondary btn-sm" @click="showMoreAttempts()">Show more attempts</button>
                         </div>
                     </article>
                 </aside>
@@ -1216,7 +1187,6 @@ HTML;
         $message = htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
 
         return $this->renderDocument($title, <<<HTML
-    {$this->backgroundMarkup()}
     <main class="benchy-main not-found-main">
         <section class="card empty-state-card">
             <span class="badge">Not Found</span>
@@ -1253,24 +1223,7 @@ HTML);
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script>
-        document.documentElement.classList.add('fonts-loading');
-        window.addEventListener('DOMContentLoaded', function () {
-            const fontReady = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
-            Promise.race([
-                fontReady,
-                new Promise((resolve) => window.setTimeout(resolve, 1200)),
-            ]).then(function () {
-                document.documentElement.classList.remove('fonts-loading');
-                document.documentElement.classList.add('fonts-ready');
-            });
-        });
-    </script>
     <title>{$title}</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=Geist+Mono:wght@100..900&display=swap">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/basecoat-css@0.3.11/dist/basecoat.cdn.min.css">
     <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
     <link rel="stylesheet" href="{$cssHref}">
     {$scripts}
@@ -1279,35 +1232,6 @@ HTML);
 {$content}
 </body>
 </html>
-HTML;
-    }
-
-    private function backgroundMarkup(): string
-    {
-        return <<<'HTML'
-    <div class="benchy-background" aria-hidden="true">
-        <div class="benchy-grid-glow"></div>
-        <svg class="benchy-hex-pattern" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
-            <defs>
-                <pattern id="hex-bg" width="105" height="60.622" patternUnits="userSpaceOnUse" x="-1" y="-1">
-                    <polygon class="hex-tile" points="61.25,30.311 43.75,60.622 8.75,60.622 -8.75,30.311 8.75,0 43.75,0"/>
-                    <polygon class="hex-tile" points="113.75,60.622 96.25,90.933 61.25,90.933 43.75,60.622 61.25,30.311 96.25,30.311"/>
-                </pattern>
-            </defs>
-            <rect width="100%" height="100%" style="fill:url(#hex-bg);stroke:none"/>
-            <svg aria-hidden="true" style="overflow:visible" x="-1" y="-1">
-                <polygon class="hex-highlight" points="112.75,121.244 95.75,150.689 61.75,150.689 44.75,121.244 61.75,91.799 95.75,91.799"/>
-                <polygon class="hex-highlight" points="165.25,151.555 148.25,181.000 114.25,181.000 97.25,151.555 114.25,122.110 148.25,122.110"/>
-                <polygon class="hex-highlight" points="217.75,303.110 200.75,332.555 166.75,332.555 149.75,303.110 166.75,273.665 200.75,273.665"/>
-                <polygon class="hex-highlight" points="270.25,272.799 253.25,302.244 219.25,302.244 202.25,272.799 219.25,243.354 253.25,243.354"/>
-                <polygon class="hex-highlight" points="322.75,303.110 305.75,332.555 271.75,332.555 254.75,303.110 271.75,273.665 305.75,273.665"/>
-                <polygon class="hex-highlight" points="375.25,212.177 358.25,241.622 324.25,241.622 307.25,212.177 324.25,182.732 358.25,182.732"/>
-                <polygon class="hex-highlight" points="480.25,151.555 463.25,181.000 429.25,181.000 412.25,151.555 429.25,122.110 463.25,122.110"/>
-                <polygon class="hex-highlight" points="480.25,333.421 463.25,362.866 429.25,362.866 412.25,333.421 429.25,304.976 463.25,304.976"/>
-                <polygon class="hex-highlight" points="585.25,636.531 568.25,666.976 534.25,666.976 517.25,636.531 534.25,607.086 568.25,607.086"/>
-            </svg>
-        </svg>
-    </div>
 HTML;
     }
 

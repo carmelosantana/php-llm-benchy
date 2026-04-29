@@ -5,13 +5,16 @@ window.sessionDetailPage = function sessionDetailPage(sessionId) {
         selectedAttempt: null,
         selectedAttemptEvents: [],
         traceExpanded: false,
+        attemptDisplayLimit: 24,
+        benchmarkScoreDisplayLimit: 18,
+        attemptTotal: 0,
 
         async init() {
             await this.refreshSession();
         },
 
         async refreshSession() {
-            const response = await fetch('/api/sessions/' + encodeURIComponent(this.sessionId));
+            const response = await fetch('/api/sessions/' + encodeURIComponent(this.sessionId) + '?attempt_limit=' + encodeURIComponent(this.attemptDisplayLimit));
             const data = await response.json();
 
             if (!response.ok) {
@@ -20,6 +23,7 @@ window.sessionDetailPage = function sessionDetailPage(sessionId) {
             }
 
             this.session = data.session;
+            this.attemptTotal = Number(this.session?.attempt_total || (this.session?.attempts || []).length);
 
             if (!Array.isArray(this.session?.attempts) || this.session.attempts.length === 0) {
                 this.selectedAttempt = null;
@@ -64,12 +68,14 @@ window.sessionDetailPage = function sessionDetailPage(sessionId) {
             const averageBenchmarkScore = benchmarkScores.length > 0
                 ? Math.round((benchmarkScores.reduce((sum, row) => sum + Number(row.average_score || 0), 0) / benchmarkScores.length) * 100) / 100
                 : 0;
+            const loadedAttemptCount = attempts.length;
+            const totalAttemptCount = this.attemptTotal || loadedAttemptCount;
 
             return [
                 {
                     label: 'Attempts',
-                    value: attempts.length,
-                    copy: attempts.filter((attempt) => attempt.status === 'completed').length + ' completed',
+                    value: totalAttemptCount,
+                    copy: totalAttemptCount > loadedAttemptCount ? (loadedAttemptCount + ' loaded') : (attempts.filter((attempt) => attempt.status === 'completed').length + ' completed'),
                 },
                 {
                     label: 'Models',
@@ -232,6 +238,31 @@ window.sessionDetailPage = function sessionDetailPage(sessionId) {
             } catch (_error) {
                 return String(value || '');
             }
+        },
+
+        visibleAttempts() {
+            return (this.session?.attempts || []).slice(0, this.attemptDisplayLimit);
+        },
+
+        hasMoreAttempts() {
+            return this.attemptTotal > (this.session?.attempts || []).length;
+        },
+
+        async showMoreAttempts() {
+            this.attemptDisplayLimit += 24;
+            await this.refreshSession();
+        },
+
+        visibleBenchmarkScores() {
+            return (this.session?.benchmark_scores || []).slice(0, this.benchmarkScoreDisplayLimit);
+        },
+
+        hasMoreBenchmarkScores() {
+            return (this.session?.benchmark_scores || []).length > this.benchmarkScoreDisplayLimit;
+        },
+
+        showMoreBenchmarkScores() {
+            this.benchmarkScoreDisplayLimit += 18;
         },
     };
 };

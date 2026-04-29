@@ -9,6 +9,7 @@ window.benchyApp = function benchyApp() {
         seedFrequencies: [],
         availableModels: [],
         sessions: [],
+        sessionTotal: 0,
         leaderboard: [],
         selectedSession: null,
         selectedAttempt: null,
@@ -24,6 +25,9 @@ window.benchyApp = function benchyApp() {
         liveReasoning: '',
         activeSeed: null,
         maxLiveEvents: 250,
+        sessionDisplayLimit: 18,
+        attemptDisplayLimit: 24,
+        benchmarkScoreDisplayLimit: 18,
         form: {
             provider: 'ollama',
             models: [],
@@ -82,9 +86,10 @@ window.benchyApp = function benchyApp() {
         },
 
         async refreshSessions() {
-            const response = await fetch('/api/sessions');
+            const response = await fetch('/api/sessions?limit=' + encodeURIComponent(this.sessionDisplayLimit));
             const data = await response.json();
             this.sessions = data.sessions || [];
+            this.sessionTotal = Number(data.total || this.sessions.length);
             this.sessionsRefreshedAt = Date.now();
         },
 
@@ -166,6 +171,7 @@ window.benchyApp = function benchyApp() {
                 this.liveOutput = '';
                 this.liveReasoning = '';
                 this.activeSeed = null;
+                this.resetSelectedSessionLimits();
                 this.running = true;
                 this.currentStatus = 'running';
                 this.sidebarOpen = false;
@@ -186,6 +192,7 @@ window.benchyApp = function benchyApp() {
         },
 
         async refreshSession(sessionId) {
+            const previousSessionId = this.selectedSession?.id || null;
             const response = await fetch('/api/sessions/' + encodeURIComponent(sessionId));
             const data = await response.json();
             if (!response.ok) {
@@ -194,6 +201,9 @@ window.benchyApp = function benchyApp() {
             }
 
             this.selectedSession = data.session;
+            if (previousSessionId !== sessionId) {
+                this.resetSelectedSessionLimits();
+            }
             if (this.selectedAttempt) {
                 const attempts = Array.isArray(this.selectedSession?.attempts) ? this.selectedSession.attempts : [];
                 const currentAttempt = attempts.find((attempt) => attempt.id === this.selectedAttempt.id);
@@ -487,6 +497,48 @@ window.benchyApp = function benchyApp() {
             if (secs < 86400) return Math.floor(secs / 3600) + ' hr ago';
             if (secs < 604800) return Math.floor(secs / 86400) + ' days ago';
             return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+        },
+
+        resetSelectedSessionLimits() {
+            this.attemptDisplayLimit = 24;
+            this.benchmarkScoreDisplayLimit = 18;
+        },
+
+        visibleSessions() {
+            return this.sessions.slice(0, this.sessionDisplayLimit);
+        },
+
+        hasMoreSessions() {
+            return this.sessionTotal > this.sessions.length;
+        },
+
+        async showMoreSessions() {
+            this.sessionDisplayLimit += 18;
+            await this.refreshSessions();
+        },
+
+        visibleSelectedAttempts() {
+            return (this.selectedSession?.attempts || []).slice(0, this.attemptDisplayLimit);
+        },
+
+        hasMoreSelectedAttempts() {
+            return (this.selectedSession?.attempts || []).length > this.attemptDisplayLimit;
+        },
+
+        showMoreSelectedAttempts() {
+            this.attemptDisplayLimit += 24;
+        },
+
+        visibleSelectedBenchmarkScores() {
+            return (this.selectedSession?.benchmark_scores || []).slice(0, this.benchmarkScoreDisplayLimit);
+        },
+
+        hasMoreSelectedBenchmarkScores() {
+            return (this.selectedSession?.benchmark_scores || []).length > this.benchmarkScoreDisplayLimit;
+        },
+
+        showMoreSelectedBenchmarkScores() {
+            this.benchmarkScoreDisplayLimit += 18;
         },
     };
 };

@@ -7,6 +7,8 @@ window.dashboardPage = function dashboardPage() {
         marioAnalytics: { overview: { total_runs: 0 }, models: [] },
         benchmarkLabels: {},
         charts: {},
+        recentSessionsDisplayLimit: 8,
+        marioRowsDisplayLimit: 10,
 
         async init() {
             await this.loadDashboard();
@@ -80,6 +82,30 @@ window.dashboardPage = function dashboardPage() {
 
         benchmarkLabel(id) {
             return this.benchmarkLabels[id] || String(id || '').replace(/_/g, ' ');
+        },
+
+        visibleRecentSessions() {
+            return this.recentSessions.slice(0, this.recentSessionsDisplayLimit);
+        },
+
+        hasMoreRecentSessions() {
+            return this.recentSessions.length > this.recentSessionsDisplayLimit;
+        },
+
+        showMoreRecentSessions() {
+            this.recentSessionsDisplayLimit += 8;
+        },
+
+        visibleMarioRows() {
+            return (this.marioAnalytics.models || []).slice(0, this.marioRowsDisplayLimit);
+        },
+
+        hasMoreMarioRows() {
+            return (this.marioAnalytics.models || []).length > this.marioRowsDisplayLimit;
+        },
+
+        showMoreMarioRows() {
+            this.marioRowsDisplayLimit += 10;
         },
 
         chartPalette() {
@@ -177,7 +203,7 @@ window.dashboardPage = function dashboardPage() {
                 return;
             }
 
-            const rows = [...this.recentSessions].reverse();
+            const rows = [...this.recentSessions.slice(0, 8)].reverse();
             this.charts.recent = new Chart(canvas, {
                 type: 'line',
                 data: {
