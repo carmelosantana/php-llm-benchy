@@ -38,7 +38,7 @@ final class AppConfig
 
     public function ollamaBaseUrl(): string
     {
-        return $this->string('OLLAMA_BASE_URL', 'http://ollama:11434/v1');
+        return $this->string('OLLAMA_BASE_URL', 'http://localhost:11434/v1');
     }
 
     public function ollamaNumCtx(): int
