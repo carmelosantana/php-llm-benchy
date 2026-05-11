@@ -19,7 +19,7 @@
 ## What it does
 
 - Creates benchmark sessions with a provider, one or more candidate models, one evaluation model, a benchmark selection, run count, and a configurable seed policy.
-- Discovers models dynamically from the provider model API. v1 is wired for Ollama at `http://ollama:11434/v1`.
+- Discovers models dynamically from the provider model API. v1 is wired for Ollama at `http://localhost:11434/v1`.
 - Runs models sequentially, captures raw response text, reasoning deltas, and tool activity, then evaluates quality in a second pass.
 - Persists sessions, attempts, stream events, benchmark averages, model rollups, and CSV export data in SQLite.
 - Shows previous sessions in a sidebar, current-session model rankings in a side rail, and overall leaders across completed sessions.
@@ -86,7 +86,7 @@ The evaluation model stays on the stable session base seed. Candidate model atte
 - PHP 8.4+
 - Composer
 - SQLite support enabled in PHP
-- An Ollama-compatible endpoint available at `http://ollama:11434/v1`
+- An Ollama-compatible endpoint available at `http://localhost:11434/v1`
 
 ## Setup
 
@@ -107,7 +107,7 @@ cp .env.example .env
 Example:
 
 ```bash
-curl http://ollama:11434/v1/models
+curl http://localhost:11434/v1/models
 ```
 
 ## Run locally
