@@ -14,6 +14,9 @@
     <picture>
         <img src="public/assets/screenshot-01.png" alt="PHP LLM Benchy Screenshot" width="800" />
     </picture>
+    <picture>
+        <img src="public/assets/screenshot-02.png" alt="Score Breakdown" width="800" />
+    </picture>    
 </p>
 
 ## What it does
